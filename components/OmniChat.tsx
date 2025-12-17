@@ -1,9 +1,11 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Mic, MicOff, Volume2, VolumeX, Wifi, WifiOff } from 'lucide-react';
+import { Mic, MicOff, Volume2, VolumeX, Wifi, WifiOff, Play, Pause } from 'lucide-react';
 import { QwenOmniClient, QwenOmniCallbacks } from '../lib/qwen-omni-client';
 import { createAudioContext, calculateAudioLevel } from '../lib/utils';
+import { PCMDecoder } from '../lib/audio/pcm-decoder';
+import { AudioPlayer } from '../lib/audio/audio-player';
 
 export default function OmniChat() {
   const [isRecording, setIsRecording] = useState(false);
@@ -12,11 +14,68 @@ export default function OmniChat() {
   const [isConnected, setIsConnected] = useState(false);
   const [transcript, setTranscript] = useState('');
   const [conversationHistory, setConversationHistory] = useState<string[]>([]);
+  const [volume, setVolume] = useState(0.7);
+  const [isPaused, setIsPaused] = useState(false);
   
   const clientRef = useRef<QwenOmniClient | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const pcmDecoderRef = useRef<PCMDecoder | null>(null);
+  const audioPlayerRef = useRef<AudioPlayer | null>(null);
+
+  // Initialize PCM Decoder and Audio Player
+  useEffect(() => {
+    const initAudioComponents = async () => {
+      try {
+        // Initialize PCM Decoder
+        pcmDecoderRef.current = new PCMDecoder({
+          sampleRate: 16000,
+          channels: 1,
+          bitDepth: 24
+        });
+
+        // Initialize Audio Player
+        audioPlayerRef.current = new AudioPlayer({
+          sampleRate: 16000,
+          channels: 1,
+          volume: volume,
+          autoPlay: false,
+          onPlay: () => {
+            setIsPlaying(true);
+            setIsPaused(false);
+          },
+          onPause: () => {
+            setIsPaused(true);
+            setIsPlaying(false);
+          },
+          onEnded: () => {
+            setIsPlaying(false);
+            setIsPaused(false);
+          },
+          onError: (error) => {
+            console.error('Audio player error:', error);
+            setIsPlaying(false);
+            setIsPaused(false);
+          }
+        });
+
+        await audioPlayerRef.current.initialize();
+        
+        console.log('Audio components initialized successfully');
+      } catch (error) {
+        console.error('Failed to initialize audio components:', error);
+      }
+    };
+
+    initAudioComponents();
+
+    return () => {
+      // Clean up
+      pcmDecoderRef.current?.dispose();
+      audioPlayerRef.current?.dispose();
+    };
+  }, [volume]);
 
   // Initialize Qwen-Omni client
   useEffect(() => {
@@ -29,11 +88,15 @@ export default function OmniChat() {
       onClose: () => {
         console.log('Disconnected from service');
         setIsConnected(false);
+        setIsPlaying(false);
+        setIsPaused(false);
       },
       
       onError: (error, type) => {
         console.error(`Error (${type}):`, error);
         setIsConnected(false);
+        setIsPlaying(false);
+        setIsPaused(false);
       },
       
       onSessionCreated: (sessionId) => {
@@ -55,17 +118,29 @@ export default function OmniChat() {
       onAudioTranscriptDone: (text) => {
         console.log('Final transcript:', text);
         setTranscript(text);
+        // Add user transcript to conversation history
         setConversationHistory(prev => [...prev, `User: ${text}`]);
+        
+        // Clear the transcript display after a delay
+        setTimeout(() => {
+          setTranscript('');
+        }, 2000);
       },
       
       onAudioData: (audioData) => {
         console.log('Received audio data:', audioData.byteLength, 'bytes');
-        // Play the received audio
-        playAudioData(audioData);
+        // Process and queue the audio data for continuous playback
+        processAndQueueAudio(audioData);
       },
       
       onResponseDone: () => {
         console.log('Response completed');
+        setTranscript(prev => {
+          if (prev.trim()) {
+            setConversationHistory(history => [...history, `Assistant: ${prev.trim()}`]);
+          }
+          return '';
+        });
       }
     };
 
@@ -160,27 +235,80 @@ export default function OmniChat() {
     }
   };
 
-  // Play audio data
-  const playAudioData = (audioData: ArrayBuffer) => {
+  // Process and queue received audio data
+  const processAndQueueAudio = async (audioData: ArrayBuffer) => {
+    if (!pcmDecoderRef.current || !audioPlayerRef.current) {
+      console.warn('Audio components not initialized');
+      return;
+    }
+
     try {
-      const audioContext = new AudioContext();
-      audioContext.decodeAudioData(audioData).then(audioBuffer => {
-        const source = audioContext.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(audioContext.destination);
-        source.start();
+      // The audioData is binary PCM24 data (already decoded from base64 by the client)
+      console.log('Processing audio data:', audioData.byteLength, 'bytes');
+      
+      // Decode PCM24 directly from the binary ArrayBuffer
+      const float32Audio = pcmDecoderRef.current.decodePCM(audioData, 24);
+      
+      if (float32Audio.length > 0) {
+        // Create AudioBuffer for playback
+        const playbackBuffer = pcmDecoderRef.current.createAudioBuffer(float32Audio);
         
-        setIsPlaying(true);
-        source.onended = () => setIsPlaying(false);
-      });
+        // Add to audio queue for continuous playback
+        audioPlayerRef.current.addToQueue(playbackBuffer);
+        
+        console.log('Audio chunk queued for playback:', float32Audio.length, 'samples');
+        
+        // Auto-start playback if not currently playing
+        const status = audioPlayerRef.current.getStatus();
+        if (!status.isPlaying && !isPaused && status.queueLength === 1) {
+          // Only auto-play if this is the first item in queue
+          await audioPlayerRef.current.play();
+        }
+      } else {
+        console.warn('No audio data decoded from buffer');
+      }
     } catch (error) {
-      console.error('Error playing audio:', error);
+      console.error('Error processing audio data:', error);
     }
   };
 
   // Manual play/pause
-  const togglePlayback = () => {
-    setIsPlaying(!isPlaying);
+  const togglePlayback = async () => {
+    if (!audioPlayerRef.current) return;
+
+    try {
+      if (isPaused) {
+        await audioPlayerRef.current.play();
+      } else if (isPlaying) {
+        audioPlayerRef.current.pause();
+      } else {
+        // Start playing from queue
+        const status = audioPlayerRef.current.getStatus();
+        if (status.queueLength > 0) {
+          await audioPlayerRef.current.play();
+        }
+      }
+    } catch (error) {
+      console.error('Error toggling playback:', error);
+    }
+  };
+
+  // Stop playback and clear queue
+  const stopPlayback = () => {
+    if (!audioPlayerRef.current) return;
+    
+    audioPlayerRef.current.stop();
+    audioPlayerRef.current.clearQueue();
+    setIsPlaying(false);
+    setIsPaused(false);
+  };
+
+  // Handle volume change
+  const handleVolumeChange = (newVolume: number) => {
+    setVolume(newVolume);
+    if (audioPlayerRef.current) {
+      audioPlayerRef.current.setVolume(newVolume);
+    }
   };
 
   // Finish session
@@ -238,9 +366,51 @@ export default function OmniChat() {
               </div>
             </div>
 
-            {/* Control Buttons */}
+            {/* Audio Playback Controls */}
             <div className="bg-white rounded-lg p-6 shadow-sm">
-              <h3 className="text-lg font-semibold mb-4">Controls</h3>
+              <h3 className="text-lg font-semibold mb-4">Audio Playback</h3>
+              <div className="flex items-center space-x-4 mb-4">
+                <button
+                  onClick={togglePlayback}
+                  disabled={!audioPlayerRef.current?.getStatus().queueLength}
+                  className="flex items-center justify-center w-12 h-12 rounded-full bg-green-500 hover:bg-green-600 text-white transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
+                >
+                  {isPaused ? <Play size={20} /> : isPlaying ? <Pause size={20} /> : <Play size={20} />}
+                </button>
+
+                <button
+                  onClick={stopPlayback}
+                  className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors"
+                >
+                  Stop
+                </button>
+
+                <div className="flex items-center space-x-2 flex-1">
+                  <VolumeX size={16} className="text-gray-500" />
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.1"
+                    value={volume}
+                    onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
+                    className="flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                  />
+                  <Volume2 size={16} className="text-gray-500" />
+                  <span className="text-sm text-gray-600 w-8">{Math.round(volume * 100)}</span>
+                </div>
+              </div>
+              
+              {audioPlayerRef.current && (
+                <div className="text-sm text-gray-600">
+                  Queue: {audioPlayerRef.current.getStatus().queueLength} items
+                </div>
+              )}
+            </div>
+
+            {/* Recording Controls */}
+            <div className="bg-white rounded-lg p-6 shadow-sm">
+              <h3 className="text-lg font-semibold mb-4">Recording</h3>
               <div className="flex justify-center space-x-6">
                 <button
                   onClick={toggleRecording}
