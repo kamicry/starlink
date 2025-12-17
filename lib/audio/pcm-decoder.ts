@@ -308,7 +308,13 @@ export class PCMDecoder {
 
     // Normalize if requested
     if (normalize) {
-      const maxValue = Math.max(...audioData.map(Math.abs));
+      let maxValue = 0;
+      for (let i = 0; i < audioData.length; i++) {
+        const absValue = Math.abs(audioData[i]);
+        if (absValue > maxValue) {
+          maxValue = absValue;
+        }
+      }
       if (maxValue > 0) {
         audioData = this.applyGain(audioData, 1.0 / maxValue * 0.95);
       }
