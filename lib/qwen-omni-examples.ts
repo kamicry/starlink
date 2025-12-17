@@ -42,8 +42,6 @@ export const basicExample = async () => {
     client.updateSession({
       modalities: ['text', 'audio'],
       voice: 'Cherry',
-      input_audio_format: 'pcm16',
-      output_audio_format: 'pcm24',
       instructions: '你是一个友好的AI助手，请用中文自然地进行对话。'
     });
 
@@ -73,7 +71,12 @@ export const advancedExample = async () => {
   // Add custom event listeners
   client.addEventListener('onOpen', () => {
     console.log('Connection established');
-    client.updateSession(); // Auto-initialize session
+    // Auto-initialize session with default configuration
+    client.updateSession({
+      modalities: ['text', 'audio'],
+      voice: 'Cherry',
+      instructions: '你是一个友好的AI助手。'
+    }); 
   });
 
   client.addEventListener('onSessionCreated', (session: QwenOmniSession) => {
