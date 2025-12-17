@@ -1,111 +1,118 @@
 import { APP_CONFIG, getEnvironmentConfig } from './constants';
 import { handleWebSocketError, generateRequestId } from './utils';
 
-export interface WebSocketMessage {
-  header: {
-    action: 'start' | 'continue' | 'finish';
-    task_id: string;
-    streaming: string;
-    [key: string]: any;
+// Qwen-Omni-Realtime specific interfaces
+
+export interface QwenOmniMessage {
+  event_id: string;
+  type: string;
+  session?: {
+    modalities?: string[];
+    voice?: string;
+    input_audio_format?: string;
+    output_audio_format?: string;
+    instructions?: string;
+    turn_detection?: any;
   };
-  payload?: {
-    audio?: {
-      sample_rate: number;
-      sample_bits: number;
-      channel: number;
-      audio_data: string;
-    };
-    [key: string]: any;
-  };
+  audio?: string; // base64 encoded audio
+  content?: string;
 }
 
-export interface WebSocketResponse {
-  header: {
-    action: string;
-    task_id: string;
-    status: string;
-    status_code: number;
-    usage?: {
-      input_tokens: number;
-      output_tokens: number;
-      total_tokens: number;
-    };
+export interface QwenOmniResponse {
+  type: string;
+  event_id?: string;
+  session?: {
+    id: string;
   };
-  payload?: {
-    audio?: {
-      sample_rate: number;
-      sample_bits: number;
-      channel: number;
-      audio_data: string;
-    };
+  transcript?: {
+    delta?: string;
     text?: string;
-    [key: string]: any;
+  };
+  audio?: {
+    delta?: string;
+  };
+  usage?: {
+    input_tokens: number;
+    output_tokens: number;
+    total_tokens: number;
+  };
+  error?: {
+    message: string;
+    type: string;
   };
 }
 
-export interface QwenOmniClientOptions {
-  onMessage?: (response: WebSocketResponse) => void;
-  onOpen?: () => void;
-  onClose?: (event: CloseEvent) => void;
-  onError?: (error: Event) => void;
+// Event callback types
+export interface QwenOmniCallbacks {
+  onSessionCreated?: (sessionId: string) => void;
+  onSessionUpdated?: () => void;
+  onSpeechStarted?: () => void;
+  onSpeechStopped?: () => void;
+  onAudioCommitted?: () => void;
+  onAudioTranscriptDelta?: (delta: string) => void;
+  onAudioTranscriptDone?: (text: string) => void;
   onAudioData?: (audioData: ArrayBuffer) => void;
-  onTextData?: (text: string) => void;
+  onAudioDone?: () => void;
+  onResponseDone?: () => void;
+  onError?: (error: string, type?: string) => void;
+  onOpen?: () => void;
+  onClose?: () => void;
 }
 
 export class QwenOmniClient {
   private ws: WebSocket | null = null;
-  private options: QwenOmniClientOptions;
-  private requestId: string;
+  private callbacks: QwenOmniCallbacks;
+  private apiKey: string;
+  private eventId: string = '';
   private isConnected: boolean = false;
   private reconnectAttempts: number = 0;
   private maxReconnectAttempts: number = 5;
+  private heartbeatInterval: NodeJS.Timeout | null = null;
 
-  constructor(options: QwenOmniClientOptions = {}) {
-    this.options = options;
-    this.requestId = generateRequestId();
+  constructor(apiKey: string, callbacks: QwenOmniCallbacks = {}) {
+    this.callbacks = callbacks;
+    this.apiKey = apiKey;
   }
 
   /**
    * Connect to the Qwen Omni WebSocket
    */
   async connect(): Promise<void> {
-    const config = getEnvironmentConfig();
-    
-    if (!config.apiKey || config.apiKey === 'your_key_here') {
-      throw new Error('API key not configured. Please set DASHSCOPE_API_KEY in .env.local');
-    }
-
     return new Promise((resolve, reject) => {
       try {
-        this.ws = new WebSocket(config.wsUrl);
+        const wsUrl = `wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3-omni-flash-realtime`;
+        this.ws = new WebSocket(wsUrl);
         
         this.ws.onopen = () => {
-          console.log('WebSocket connected');
+          console.log('Qwen-Omni WebSocket connected');
           this.isConnected = true;
           this.reconnectAttempts = 0;
-          this.options.onOpen?.();
+          this.startHeartbeat();
+          this.callbacks.onOpen?.();
           resolve();
         };
 
         this.ws.onmessage = (event) => {
           try {
-            const response: WebSocketResponse = JSON.parse(event.data);
+            const response: QwenOmniResponse = JSON.parse(event.data);
             this.handleMessage(response);
           } catch (error) {
             console.error('Error parsing WebSocket message:', error);
+            this.callbacks.onError?.('Error parsing message');
           }
         };
 
         this.ws.onclose = (event) => {
-          console.log('WebSocket closed:', event.code, event.reason);
+          console.log('Qwen-Omni WebSocket closed:', event.code, event.reason);
           this.isConnected = false;
-          this.options.onClose?.(event);
+          this.stopHeartbeat();
+          this.callbacks.onClose?.();
           this.handleReconnect();
         };
 
         this.ws.onerror = (error) => {
-          console.error('WebSocket error:', error);
-          this.options.onError?.(error);
+          console.error('Qwen-Omni WebSocket error:', error);
+          this.callbacks.onError?.('WebSocket connection error');
           reject(error);
         };
 
@@ -118,48 +125,95 @@ export class QwenOmniClient {
   /**
    * Handle incoming WebSocket messages
    */
-  private handleMessage(response: WebSocketResponse): void {
-    // Call the message handler
-    this.options.onMessage?.(response);
+  private handleMessage(response: QwenOmniResponse): void {
+    console.log('Received message:', response);
 
-    // Handle audio data
-    if (response.payload?.audio?.audio_data) {
-      const audioBuffer = this.base64ToArrayBuffer(response.payload.audio.audio_data);
-      this.options.onAudioData?.(audioBuffer);
-    }
+    switch (response.type) {
+      case 'session.created':
+        if (response.session?.id) {
+          this.callbacks.onSessionCreated?.(response.session.id);
+        }
+        break;
 
-    // Handle text data
-    if (response.payload?.text) {
-      this.options.onTextData?.(response.payload.text);
-    }
+      case 'session.updated':
+        this.callbacks.onSessionUpdated?.();
+        break;
 
-    // Log usage statistics if available
-    if (response.header.usage) {
-      console.log('Token usage:', response.header.usage);
+      case 'input_audio_buffer.speech_started':
+        this.callbacks.onSpeechStarted?.();
+        break;
+
+      case 'input_audio_buffer.speech_stopped':
+        this.callbacks.onSpeechStopped?.();
+        break;
+
+      case 'input_audio_buffer.committed':
+        this.callbacks.onAudioCommitted?.();
+        break;
+
+      case 'response.audio_transcript.delta':
+        if (response.transcript?.delta) {
+          this.callbacks.onAudioTranscriptDelta?.(response.transcript.delta);
+        }
+        break;
+
+      case 'response.audio_transcript.done':
+        if (response.transcript?.text) {
+          this.callbacks.onAudioTranscriptDone?.(response.transcript.text);
+        }
+        break;
+
+      case 'response.audio.delta':
+        if (response.audio?.delta) {
+          const audioBuffer = this.base64ToArrayBuffer(response.audio.delta);
+          this.callbacks.onAudioData?.(audioBuffer);
+        }
+        break;
+
+      case 'response.audio.done':
+        this.callbacks.onAudioDone?.();
+        break;
+
+      case 'response.done':
+        this.callbacks.onResponseDone?.();
+        break;
+
+      case 'error':
+        if (response.error) {
+          this.callbacks.onError?.(response.error.message, response.error.type);
+        }
+        break;
+
+      default:
+        console.log('Unhandled message type:', response.type);
     }
   }
 
   /**
-   * Start audio transmission
+   * Send session update to initialize session
    */
-  startAudioTransmission(audioConfig?: any): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      throw new Error('WebSocket not connected');
+  updateSession(config?: {
+    modalities?: string[];
+    voice?: string;
+    input_audio_format?: string;
+    output_audio_format?: string;
+    instructions?: string;
+  }): void {
+    if (!this.isConnected) {
+      console.warn('WebSocket not connected, cannot update session');
+      return;
     }
 
-    const message: WebSocketMessage = {
-      header: {
-        action: 'start',
-        task_id: this.requestId,
-        streaming: 'duplex'
-      },
-      payload: {
-        audio: {
-          sample_rate: audioConfig?.sample_rate || APP_CONFIG.AUDIO.SAMPLE_RATE,
-          sample_bits: audioConfig?.sample_bits || APP_CONFIG.AUDIO.BIT_DEPTH,
-          channel: audioConfig?.channel || APP_CONFIG.AUDIO.CHANNELS,
-          audio_data: ''
-        }
+    const message: QwenOmniMessage = {
+      event_id: generateRequestId(),
+      type: 'session.update',
+      session: {
+        modalities: config?.modalities || ['text', 'audio'],
+        voice: config?.voice || 'Cherry',
+        input_audio_format: config?.input_audio_format || 'pcm16',
+        output_audio_format: config?.output_audio_format || 'pcm24',
+        instructions: config?.instructions || '你是一个友好的 AI 助手，请自然地进行对话。',
+        turn_detection: null
       }
     };
 
@@ -167,47 +221,52 @@ export class QwenOmniClient {
   }
 
   /**
-   * Send audio data
+   * Append audio to input buffer
    */
-  sendAudioData(audioData: ArrayBuffer): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      console.warn('WebSocket not connected, cannot send audio data');
+  appendAudio(audioData: ArrayBuffer): void {
+    if (!this.isConnected) {
+      console.warn('WebSocket not connected, cannot append audio');
       return;
     }
 
-    const message: WebSocketMessage = {
-      header: {
-        action: 'continue',
-        task_id: this.requestId,
-        streaming: 'duplex'
-      },
-      payload: {
-        audio: {
-          sample_rate: APP_CONFIG.AUDIO.SAMPLE_RATE,
-          sample_bits: APP_CONFIG.AUDIO.BIT_DEPTH,
-          channel: APP_CONFIG.AUDIO.CHANNELS,
-          audio_data: this.arrayBufferToBase64(audioData)
-        }
-      }
+    const message: QwenOmniMessage = {
+      event_id: generateRequestId(),
+      type: 'input_audio_buffer.append',
+      audio: this.arrayBufferToBase64(audioData)
     };
 
     this.sendMessage(message);
   }
 
   /**
-   * Finish the transmission
+   * Commit audio buffer
    */
-  finishTransmission(): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+  commit(): void {
+    if (!this.isConnected) {
+      console.warn('WebSocket not connected, cannot commit audio');
       return;
     }
 
-    const message: WebSocketMessage = {
-      header: {
-        action: 'finish',
-        task_id: this.requestId,
-        streaming: 'duplex'
-      }
+    const message: QwenOmniMessage = {
+      event_id: generateRequestId(),
+      type: 'input_audio_buffer.commit'
+    };
+
+    this.sendMessage(message);
+  }
+
+  /**
+   * Finish session
+   */
+  finish(): void {
+    if (!this.isConnected) {
+      console.warn('WebSocket not connected, cannot finish session');
+      return;
+    }
+
+    const message: QwenOmniMessage = {
+      event_id: generateRequestId(),
+      type: 'session.finish'
     };
 
     this.sendMessage(message);
@@ -216,8 +275,9 @@ export class QwenOmniClient {
   /**
    * Send a message through WebSocket
    */
-  private sendMessage(message: WebSocketMessage): void {
+  private sendMessage(message: QwenOmniMessage): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      console.log('Sending message:', message);
       this.ws.send(JSON.stringify(message));
     }
   }
@@ -237,6 +297,32 @@ export class QwenOmniClient {
       }, 1000 * this.reconnectAttempts);
     } else {
       console.error('Max reconnection attempts reached');
+      this.callbacks.onError?.('Max reconnection attempts reached');
+    }
+  }
+
+  /**
+   * Start heartbeat to keep connection alive
+   */
+  private startHeartbeat(): void {
+    this.heartbeatInterval = setInterval(() => {
+      if (this.isConnected && this.ws) {
+        const heartbeatMessage: QwenOmniMessage = {
+          event_id: generateRequestId(),
+          type: 'ping'
+        };
+        this.sendMessage(heartbeatMessage);
+      }
+    }, 30000); // Send ping every 30 seconds
+  }
+
+  /**
+   * Stop heartbeat
+   */
+  private stopHeartbeat(): void {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
     }
   }
 
@@ -245,6 +331,7 @@ export class QwenOmniClient {
    */
   disconnect(): void {
     if (this.ws) {
+      this.stopHeartbeat();
       this.ws.close(1000, 'Client disconnect');
       this.ws = null;
       this.isConnected = false;
@@ -280,5 +367,33 @@ export class QwenOmniClient {
       bytes[i] = binaryString.charCodeAt(i);
     }
     return bytes.buffer;
+  }
+
+  /**
+   * Add event listener
+   */
+  addEventListener(event: keyof QwenOmniCallbacks, callback: Function): void {
+    (this.callbacks as any)[event] = callback;
+  }
+
+  /**
+   * Remove event listener
+   */
+  removeEventListener(event: keyof QwenOmniCallbacks): void {
+    (this.callbacks as any)[event] = undefined;
+  }
+
+  /**
+   * Get current session ID
+   */
+  getSessionId(): string {
+    return this.eventId;
+  }
+
+  /**
+   * Set custom API key
+   */
+  setApiKey(apiKey: string): void {
+    this.apiKey = apiKey;
   }
 }
