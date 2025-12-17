@@ -1,70 +1,106 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
-import { Mic, MicOff, Volume2, VolumeX, Wifi, WifiOff, Play, Pause } from 'lucide-react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Mic, MicOff, Volume2, VolumeX, Wifi, WifiOff, Play, Pause, Trash2, Activity, Loader2 } from 'lucide-react';
 import { QwenOmniClient, QwenOmniCallbacks } from '../lib/qwen-omni-client';
-import { createAudioContext, calculateAudioLevel } from '../lib/utils';
 import { PCMDecoder } from '../lib/audio/pcm-decoder';
 import { AudioPlayer } from '../lib/audio/audio-player';
+import { AudioProcessor } from '../lib/audio/audio-processor';
+
+// Types for component status
+type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
+type AppStatus = 'idle' | 'listening' | 'processing' | 'speaking';
 
 export default function OmniChat() {
-  const [isRecording, setIsRecording] = useState(false);
-  const [isPlaying, setIsPlaying] = useState(false);
+  // Application State
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('disconnected');
+  const [appStatus, setAppStatus] = useState<AppStatus>('idle');
   const [audioLevel, setAudioLevel] = useState(0);
-  const [isConnected, setIsConnected] = useState(false);
   const [transcript, setTranscript] = useState('');
-  const [conversationHistory, setConversationHistory] = useState<string[]>([]);
+  const [conversationHistory, setConversationHistory] = useState<{role: 'user' | 'assistant', text: string}[]>([]);
   const [volume, setVolume] = useState(0.7);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isPaused, setIsPaused] = useState(false);
-  
+  const [voice, setVoice] = useState('Cherry');
+
+  // Refs for instances
   const clientRef = useRef<QwenOmniClient | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
+  const audioProcessorRef = useRef<AudioProcessor | null>(null);
   const pcmDecoderRef = useRef<PCMDecoder | null>(null);
   const audioPlayerRef = useRef<AudioPlayer | null>(null);
+  const transcriptRef = useRef<HTMLDivElement>(null);
+  
+  // Auto-scroll transcript
+  useEffect(() => {
+    if (transcriptRef.current) {
+      transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
+    }
+  }, [transcript, conversationHistory]);
 
-  // Initialize PCM Decoder and Audio Player
+  // Initialize Audio Components
   useEffect(() => {
     const initAudioComponents = async () => {
       try {
         // Initialize PCM Decoder
         pcmDecoderRef.current = new PCMDecoder({
-          sampleRate: 16000,
+          sampleRate: 24000, // Output format is usually 24kHz for high quality text-to-speech
           channels: 1,
           bitDepth: 24
         });
 
         // Initialize Audio Player
         audioPlayerRef.current = new AudioPlayer({
-          sampleRate: 16000,
+          sampleRate: 24000, // Match decoder sample rate
           channels: 1,
           volume: volume,
           autoPlay: false,
           onPlay: () => {
-            setIsPlaying(true);
+            setAppStatus('speaking');
             setIsPaused(false);
           },
           onPause: () => {
             setIsPaused(true);
-            setIsPlaying(false);
           },
           onEnded: () => {
-            setIsPlaying(false);
+            if (connectionStatus === 'connected') {
+              setAppStatus('idle'); // Or back to listening if we were in continuous mode
+            }
             setIsPaused(false);
           },
           onError: (error) => {
             console.error('Audio player error:', error);
-            setIsPlaying(false);
-            setIsPaused(false);
+            setErrorMsg(`Audio player error: ${error}`);
           }
         });
 
         await audioPlayerRef.current.initialize();
         
-        console.log('Audio components initialized successfully');
+        // Initialize Audio Processor (Microphone)
+        audioProcessorRef.current = new AudioProcessor({
+          sampleRate: 16000, // Input sample rate required by Qwen
+          channels: 1,
+          chunkDurationMs: 100, // Send chunk every 100ms
+          onAudioChunk: (buffer) => {
+            // Forward audio chunk to WebSocket
+            if (clientRef.current && clientRef.current.getConnectionStatus()) {
+              clientRef.current.appendAudio(buffer);
+            }
+          },
+          onAudioLevel: (level) => {
+            setAudioLevel(level);
+          },
+          onError: (error) => {
+            console.error('Audio processor error:', error);
+            setErrorMsg(`Microphone error: ${error}`);
+          }
+        });
+        
+        // Initialize Audio Processor resources (request mic permission early or wait for start)
+        // Note: initialization usually requires user interaction, so we might do it on "Start"
+        
       } catch (error) {
         console.error('Failed to initialize audio components:', error);
+        setErrorMsg('Failed to initialize audio components');
       }
     };
 
@@ -74,434 +110,357 @@ export default function OmniChat() {
       // Clean up
       pcmDecoderRef.current?.dispose();
       audioPlayerRef.current?.dispose();
-    };
-  }, [volume]);
-
-  // Initialize Qwen-Omni client
-  useEffect(() => {
-    const callbacks: QwenOmniCallbacks = {
-      onOpen: () => {
-        console.log('Connected to Qwen-Omni service');
-        setIsConnected(true);
-      },
-      
-      onClose: () => {
-        console.log('Disconnected from service');
-        setIsConnected(false);
-        setIsPlaying(false);
-        setIsPaused(false);
-      },
-      
-      onError: (error, type) => {
-        console.error(`Error (${type}):`, error);
-        setIsConnected(false);
-        setIsPlaying(false);
-        setIsPaused(false);
-      },
-      
-      onSessionCreated: (sessionId) => {
-        console.log('Session created:', sessionId);
-      },
-      
-      onSpeechStarted: () => {
-        console.log('Speech started detected');
-      },
-      
-      onSpeechStopped: () => {
-        console.log('Speech stopped detected');
-      },
-      
-      onAudioTranscriptDelta: (delta) => {
-        setTranscript(prev => prev + delta);
-      },
-      
-      onAudioTranscriptDone: (text) => {
-        console.log('Final transcript:', text);
-        setTranscript(text);
-        // Add user transcript to conversation history
-        setConversationHistory(prev => [...prev, `User: ${text}`]);
-        
-        // Clear the transcript display after a delay
-        setTimeout(() => {
-          setTranscript('');
-        }, 2000);
-      },
-      
-      onAudioData: (audioData) => {
-        console.log('Received audio data:', audioData.byteLength, 'bytes');
-        // Process and queue the audio data for continuous playback
-        processAndQueueAudio(audioData);
-      },
-      
-      onResponseDone: () => {
-        console.log('Response completed');
-        setTranscript(prev => {
-          if (prev.trim()) {
-            setConversationHistory(history => [...history, `Assistant: ${prev.trim()}`]);
-          }
-          return '';
-        });
-      }
-    };
-
-    const apiKey = process.env.NEXT_PUBLIC_DASHSCOPE_API_KEY || 'your_api_key_here';
-    clientRef.current = new QwenOmniClient(apiKey, callbacks);
-    
-    // Auto-connect
-    clientRef.current.connect().catch(console.error);
-    
-    return () => {
+      audioProcessorRef.current?.dispose();
       clientRef.current?.disconnect();
     };
   }, []);
 
-  // Start recording audio
-  const startRecording = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        audio: {
-          sampleRate: 16000,
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true
-        } 
-      });
-      
-      audioContextRef.current = createAudioContext();
-      const mediaRecorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = mediaRecorder;
-      audioChunksRef.current = [];
-      
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
-      };
-      
-      mediaRecorder.onstop = () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
-        audioBlob.arrayBuffer().then(buffer => {
-          clientRef.current?.appendAudio(buffer);
-          clientRef.current?.commit();
-        });
-        
-        // Clean up
-        stream.getTracks().forEach(track => track.stop());
-      };
-      
-      // Monitor audio levels
-      const monitorAudioLevel = () => {
-        if (isRecording && audioContextRef.current) {
-          const analyser = audioContextRef.current.createAnalyser();
-          const source = audioContextRef.current.createMediaStreamSource(stream);
-          source.connect(analyser);
-          analyser.fftSize = 256;
-          const bufferLength = analyser.frequencyBinCount;
-          const dataArray = new Uint8Array(bufferLength);
-          analyser.getByteFrequencyData(dataArray);
-          
-          const level = calculateAudioLevel(Float32Array.from(dataArray));
-          setAudioLevel(level);
-          
-          if (isRecording) {
-            requestAnimationFrame(monitorAudioLevel);
-          }
-        }
-      };
-      
-      mediaRecorder.start(100); // Collect data every 100ms
-      setIsRecording(true);
-      monitorAudioLevel();
-      
-    } catch (error) {
-      console.error('Error starting recording:', error);
+  // Sync volume
+  useEffect(() => {
+    if (audioPlayerRef.current) {
+      audioPlayerRef.current.setVolume(volume);
     }
-  };
+  }, [volume]);
 
-  // Stop recording
-  const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
-      setAudioLevel(0);
-    }
-  };
-
-  const toggleRecording = () => {
-    if (isRecording) {
-      stopRecording();
-    } else {
-      startRecording();
-    }
-  };
-
-  // Process and queue received audio data
-  const processAndQueueAudio = async (audioData: ArrayBuffer) => {
-    if (!pcmDecoderRef.current || !audioPlayerRef.current) {
-      console.warn('Audio components not initialized');
-      return;
-    }
+  // Process and Queue Audio Logic
+  const processAndQueueAudio = useCallback((audioData: ArrayBuffer) => {
+    if (!pcmDecoderRef.current || !audioPlayerRef.current) return;
 
     try {
-      // The audioData is binary PCM24 data (already decoded from base64 by the client)
-      console.log('Processing audio data:', audioData.byteLength, 'bytes');
-      
-      // Decode PCM24 directly from the binary ArrayBuffer
+      // Decode PCM24
       const float32Audio = pcmDecoderRef.current.decodePCM(audioData, 24);
       
       if (float32Audio.length > 0) {
-        // Create AudioBuffer for playback
+        // Create AudioBuffer
         const playbackBuffer = pcmDecoderRef.current.createAudioBuffer(float32Audio);
         
-        // Add to audio queue for continuous playback
+        // Add to queue
         audioPlayerRef.current.addToQueue(playbackBuffer);
         
-        console.log('Audio chunk queued for playback:', float32Audio.length, 'samples');
-        
-        // Auto-start playback if not currently playing
+        // Auto-play if not playing
         const status = audioPlayerRef.current.getStatus();
         if (!status.isPlaying && !isPaused && status.queueLength === 1) {
-          // Only auto-play if this is the first item in queue
-          await audioPlayerRef.current.play();
+          audioPlayerRef.current.play().catch(e => console.error("Auto-play failed", e));
         }
-      } else {
-        console.warn('No audio data decoded from buffer');
       }
     } catch (error) {
       console.error('Error processing audio data:', error);
     }
-  };
+  }, [isPaused]);
 
-  // Manual play/pause
-  const togglePlayback = async () => {
-    if (!audioPlayerRef.current) return;
-
-    try {
-      if (isPaused) {
-        await audioPlayerRef.current.play();
-      } else if (isPlaying) {
-        audioPlayerRef.current.pause();
-      } else {
-        // Start playing from queue
-        const status = audioPlayerRef.current.getStatus();
-        if (status.queueLength > 0) {
-          await audioPlayerRef.current.play();
-        }
-      }
-    } catch (error) {
-      console.error('Error toggling playback:', error);
-    }
-  };
-
-  // Stop playback and clear queue
-  const stopPlayback = () => {
-    if (!audioPlayerRef.current) return;
+  // Start Voice Session
+  const startSession = async () => {
+    setErrorMsg(null);
+    setConnectionStatus('connecting');
     
-    audioPlayerRef.current.stop();
-    audioPlayerRef.current.clearQueue();
-    setIsPlaying(false);
-    setIsPaused(false);
-  };
+    try {
+      // 1. Initialize Microphone first to ensure permission
+      if (audioProcessorRef.current) {
+        await audioProcessorRef.current.initialize();
+      }
 
-  // Handle volume change
-  const handleVolumeChange = (newVolume: number) => {
-    setVolume(newVolume);
-    if (audioPlayerRef.current) {
-      audioPlayerRef.current.setVolume(newVolume);
+      // 2. Setup Client
+      const callbacks: QwenOmniCallbacks = {
+        onOpen: () => {
+          console.log('Connected to Qwen-Omni');
+          setConnectionStatus('connected');
+          
+          // 2.1 Update Session immediately after connection
+          clientRef.current?.updateSession({
+            voice: voice,
+            input_audio_format: 'pcm16',
+            output_audio_format: 'pcm24',
+            instructions: 'You are a helpful AI assistant.'
+          });
+        },
+        
+        onSessionCreated: (sessionId) => {
+          console.log('Session created:', sessionId);
+          // 3. Start Capture after session is ready
+          audioProcessorRef.current?.startCapture().then(() => {
+            setAppStatus('listening');
+          }).catch(err => {
+            setErrorMsg(`Failed to start mic: ${err}`);
+            setConnectionStatus('error');
+          });
+        },
+
+        onSessionUpdated: () => {
+           console.log('Session updated');
+        },
+        
+        onClose: () => {
+          console.log('Disconnected');
+          setConnectionStatus('disconnected');
+          setAppStatus('idle');
+          setAudioLevel(0);
+        },
+        
+        onError: (error, type) => {
+          console.error(`Error (${type}):`, error);
+          setErrorMsg(`${type || 'Error'}: ${error}`);
+          // Don't necessarily disconnect on all errors, but for connection error we might
+          if (type === 'WebSocket connection error' || type === 'reconnection') {
+             setConnectionStatus('error');
+             setAppStatus('idle');
+          }
+        },
+        
+        onAudioTranscriptDelta: (delta) => {
+          setTranscript(prev => prev + delta);
+          setAppStatus('processing');
+        },
+        
+        onAudioTranscriptDone: (text) => {
+           // Move current transcript to history
+           setTranscript('');
+           setConversationHistory(prev => [...prev, { role: 'assistant', text }]);
+        },
+
+        onAudioData: (audioData) => {
+          // Process audio for playback
+          processAndQueueAudio(audioData);
+        },
+        
+        onSpeechStarted: () => {
+           // User started speaking
+           console.log("Speech started");
+        },
+        
+        onSpeechStopped: () => {
+           // User stopped speaking
+           console.log("Speech stopped");
+        }
+      };
+
+      const apiKey = process.env.NEXT_PUBLIC_DASHSCOPE_API_KEY || '';
+      if (!apiKey) {
+        throw new Error('API Key is missing');
+      }
+
+      clientRef.current = new QwenOmniClient(apiKey, callbacks);
+      await clientRef.current.connect();
+
+    } catch (error: any) {
+      console.error('Failed to start session:', error);
+      setErrorMsg(error.message || 'Failed to start session');
+      setConnectionStatus('error');
     }
   };
 
-  // Finish session
-  const finishSession = () => {
-    clientRef.current?.finish();
+  // Stop Voice Session
+  const stopSession = async () => {
+    if (audioProcessorRef.current?.isActive()) {
+      audioProcessorRef.current.stopCapture();
+    }
+    
+    // Commit remaining audio
+    if (clientRef.current && clientRef.current.getConnectionStatus()) {
+       clientRef.current.commit();
+       // We don't disconnect immediately to allow pending audio responses to finish
+       // But based on ticket requirements: "4. 断开连接"
+       // Let's give it a short delay or just disconnect if the user wants to "Stop"
+       
+       // For a true "Stop" button in a UI, it usually means "I want to stop everything".
+       // So we will disconnect.
+       setTimeout(() => {
+         clientRef.current?.disconnect();
+         audioPlayerRef.current?.stop();
+         audioPlayerRef.current?.clearQueue();
+       }, 500);
+    } else {
+        clientRef.current?.disconnect();
+    }
   };
+
+  const clearHistory = () => {
+    setConversationHistory([]);
+    setTranscript('');
+  };
+
+  const isConnected = connectionStatus === 'connected';
 
   return (
-    <div className="omni-chat-container min-h-screen bg-gray-50 p-4">
-      <div className="max-w-4xl mx-auto">
-        <header className="text-center mb-8">
-          <h1 className="text-4xl font-bold text-gray-900 mb-2">Qwen-Omni Voice Chat</h1>
-          <p className="text-gray-600">Real-time AI voice conversation with Qwen-Omni</p>
-        </header>
+    <div className="w-full max-w-4xl mx-auto p-4 md:p-6 bg-white rounded-xl shadow-lg my-8">
+      {/* Header */}
+      <header className="flex justify-between items-center mb-8 border-b pb-4">
+        <div>
+           <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
+             <Activity className="text-blue-600" />
+             OmniChat
+           </h1>
+           <p className="text-gray-500 text-sm mt-1">Real-time Voice Interaction</p>
+        </div>
+        
+        {/* Connection Indicator */}
+        <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-full border">
+          {connectionStatus === 'connecting' ? (
+             <Loader2 className="animate-spin text-orange-500" size={16} />
+          ) : isConnected ? (
+             <Wifi className="text-green-500" size={16} />
+          ) : (
+             <WifiOff className="text-gray-400" size={16} />
+          )}
+          <span className={`text-sm font-medium ${
+            isConnected ? 'text-green-600' : 
+            connectionStatus === 'connecting' ? 'text-orange-600' :
+            connectionStatus === 'error' ? 'text-red-600' : 'text-gray-500'
+          }`}>
+            {connectionStatus === 'connected' ? 'Connected' : 
+             connectionStatus === 'connecting' ? 'Connecting...' : 
+             connectionStatus === 'error' ? 'Error' : 'Disconnected'}
+          </span>
+        </div>
+      </header>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* Left Panel - Controls */}
-          <div className="space-y-6">
-            {/* Connection Status */}
-            <div className="bg-white rounded-lg p-4 shadow-sm">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-semibold">Connection</h2>
-                <div className="flex items-center space-x-2">
-                  {isConnected ? (
-                    <Wifi className="text-green-500" size={20} />
-                  ) : (
-                    <WifiOff className="text-red-500" size={20} />
-                  )}
-                  <span className={`text-sm ${isConnected ? 'text-green-600' : 'text-red-600'}`}>
-                    {isConnected ? 'Connected' : 'Disconnected'}
-                  </span>
-                </div>
+      {/* Main Content Area */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        
+        {/* Left Column: Controls */}
+        <div className="md:col-span-1 space-y-6">
+           
+           {/* Voice Control Panel */}
+           <div className="bg-gray-50 rounded-lg p-4 border border-gray-100">
+              <div className="flex flex-col gap-4">
+                 {/* Start/Stop Button */}
+                 {!isConnected ? (
+                   <button
+                     onClick={startSession}
+                     disabled={connectionStatus === 'connecting'}
+                     className={`w-full py-4 rounded-xl flex flex-col items-center justify-center gap-2 transition-all ${
+                       connectionStatus === 'connecting' 
+                         ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                         : 'bg-blue-600 hover:bg-blue-700 text-white shadow-md hover:shadow-lg'
+                     }`}
+                   >
+                     <Mic size={24} />
+                     <span className="font-semibold">Start Voice</span>
+                   </button>
+                 ) : (
+                   <button
+                     onClick={stopSession}
+                     className="w-full py-4 rounded-xl flex flex-col items-center justify-center gap-2 bg-red-500 hover:bg-red-600 text-white shadow-md hover:shadow-lg transition-all"
+                   >
+                     <MicOff size={24} />
+                     <span className="font-semibold">Stop Voice</span>
+                   </button>
+                 )}
+
+                 {/* Status Detail */}
+                 {isConnected && (
+                    <div className="text-center py-2 bg-white rounded-lg border border-gray-100">
+                      <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">Status</div>
+                      <div className="font-medium text-blue-600 capitalize flex items-center justify-center gap-2">
+                        {appStatus === 'listening' && <span className="relative flex h-3 w-3"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span><span className="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span></span>}
+                        {appStatus === 'speaking' && <Play size={14} className="animate-pulse" />}
+                        {appStatus}
+                      </div>
+                    </div>
+                 )}
               </div>
-              
-              {isConnected && (
-                <div className="text-sm text-gray-600">
-                  Session active with Qwen-Omni Realtime API
-                </div>
-              )}
-            </div>
+           </div>
 
-            {/* Audio Visualizer */}
-            <div className="bg-white rounded-lg p-6 shadow-sm">
-              <h3 className="text-lg font-semibold mb-4">Audio Level</h3>
-              <div className="w-full bg-gray-200 rounded-full h-4 mb-2">
+           {/* Audio Visualizer / Level */}
+           <div className="bg-gray-50 rounded-lg p-4 border border-gray-100">
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-xs font-semibold text-gray-500">MICROPHONE</span>
+                <span className="text-xs text-gray-400">{Math.round(audioLevel)}%</span>
+              </div>
+              <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
                 <div 
-                  className={`h-4 rounded-full transition-all duration-100 ${
-                    isRecording ? 'bg-red-500' : 'bg-blue-500'
-                  }`}
-                  style={{ width: `${audioLevel}%` }}
+                   className="h-full bg-blue-500 transition-all duration-75"
+                   style={{ width: `${audioLevel}%` }}
                 />
               </div>
-              <div className="text-center text-sm text-gray-500">
-                {isRecording ? 'Listening and processing...' : 'Ready to record'}
+           </div>
+
+           {/* Volume Control */}
+           <div className="bg-gray-50 rounded-lg p-4 border border-gray-100">
+              <div className="flex items-center gap-3">
+                 <button onClick={() => setVolume(v => v === 0 ? 0.7 : 0)}>
+                   {volume === 0 ? <VolumeX size={18} className="text-gray-400"/> : <Volume2 size={18} className="text-gray-600"/>}
+                 </button>
+                 <input 
+                   type="range" 
+                   min="0" max="1" step="0.05"
+                   value={volume}
+                   onChange={(e) => setVolume(parseFloat(e.target.value))}
+                   className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                 />
               </div>
-            </div>
+           </div>
 
-            {/* Audio Playback Controls */}
-            <div className="bg-white rounded-lg p-6 shadow-sm">
-              <h3 className="text-lg font-semibold mb-4">Audio Playback</h3>
-              <div className="flex items-center space-x-4 mb-4">
-                <button
-                  onClick={togglePlayback}
-                  disabled={!audioPlayerRef.current?.getStatus().queueLength}
-                  className="flex items-center justify-center w-12 h-12 rounded-full bg-green-500 hover:bg-green-600 text-white transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
-                >
-                  {isPaused ? <Play size={20} /> : isPlaying ? <Pause size={20} /> : <Play size={20} />}
-                </button>
+           {/* Settings (Voice) */}
+           <div className="bg-gray-50 rounded-lg p-4 border border-gray-100">
+              <label className="block text-xs font-semibold text-gray-500 mb-2">VOICE</label>
+              <select 
+                value={voice} 
+                onChange={(e) => setVoice(e.target.value)}
+                disabled={isConnected}
+                className="w-full p-2 bg-white border border-gray-200 rounded-md text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+              >
+                <option value="Cherry">Cherry (Default)</option>
+                <option value="Harry">Harry</option>
+              </select>
+           </div>
+        </div>
 
-                <button
-                  onClick={stopPlayback}
-                  className="px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors"
-                >
-                  Stop
-                </button>
+        {/* Right Column: Transcript & Interaction */}
+        <div className="md:col-span-2 flex flex-col h-[500px]">
+           
+           {/* Transcript Area */}
+           <div 
+             ref={transcriptRef}
+             className="flex-1 bg-gray-50 rounded-xl border border-gray-200 p-4 overflow-y-auto space-y-4"
+           >
+              {conversationHistory.length === 0 && !transcript && (
+                 <div className="h-full flex flex-col items-center justify-center text-gray-400">
+                    <Activity size={48} className="mb-4 opacity-20" />
+                    <p>Start voice chat to see transcription</p>
+                 </div>
+              )}
 
-                <div className="flex items-center space-x-2 flex-1">
-                  <VolumeX size={16} className="text-gray-500" />
-                  <input
-                    type="range"
-                    min="0"
-                    max="1"
-                    step="0.1"
-                    value={volume}
-                    onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
-                    className="flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                  />
-                  <Volume2 size={16} className="text-gray-500" />
-                  <span className="text-sm text-gray-600 w-8">{Math.round(volume * 100)}</span>
+              {conversationHistory.map((msg, idx) => (
+                <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                   <div className={`max-w-[80%] rounded-2xl px-4 py-2 text-sm ${
+                      msg.role === 'user' 
+                        ? 'bg-blue-600 text-white rounded-tr-none' 
+                        : 'bg-white border border-gray-200 text-gray-800 rounded-tl-none shadow-sm'
+                   }`}>
+                      {msg.text}
+                   </div>
                 </div>
-              </div>
-              
-              {audioPlayerRef.current && (
-                <div className="text-sm text-gray-600">
-                  Queue: {audioPlayerRef.current.getStatus().queueLength} items
+              ))}
+
+              {/* Current Live Transcript */}
+              {transcript && (
+                 <div className="flex justify-start">
+                   <div className="max-w-[80%] bg-white border border-gray-200 text-gray-800 rounded-2xl rounded-tl-none shadow-sm px-4 py-2 text-sm">
+                      <div className="flex items-center gap-2">
+                         <span className="animate-pulse w-1.5 h-1.5 bg-blue-500 rounded-full"></span>
+                         {transcript}
+                      </div>
+                   </div>
+                 </div>
+              )}
+           </div>
+
+           {/* Actions Footer */}
+           <div className="mt-4 flex justify-between items-center">
+              <button 
+                onClick={clearHistory}
+                className="text-gray-400 hover:text-red-500 flex items-center gap-1 text-sm transition-colors"
+              >
+                <Trash2 size={14} /> Clear History
+              </button>
+
+              {errorMsg && (
+                <div className="text-red-500 text-sm bg-red-50 px-3 py-1 rounded-full border border-red-100 animate-fade-in">
+                   {errorMsg}
                 </div>
               )}
-            </div>
+           </div>
 
-            {/* Recording Controls */}
-            <div className="bg-white rounded-lg p-6 shadow-sm">
-              <h3 className="text-lg font-semibold mb-4">Recording</h3>
-              <div className="flex justify-center space-x-6">
-                <button
-                  onClick={toggleRecording}
-                  disabled={!isConnected}
-                  className={`flex items-center justify-center w-20 h-20 rounded-full transition-all duration-200 ${
-                    isRecording
-                      ? 'bg-red-500 hover:bg-red-600 text-white animate-pulse'
-                      : isConnected
-                      ? 'bg-blue-500 hover:bg-blue-600 text-white'
-                      : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                  }`}
-                >
-                  {isRecording ? <MicOff size={32} /> : <Mic size={32} />}
-                </button>
-
-                <button
-                  onClick={finishSession}
-                  disabled={!isConnected}
-                  className="px-6 py-3 bg-gray-500 hover:bg-gray-600 text-white rounded-lg transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
-                >
-                  Finish
-                </button>
-              </div>
-            </div>
-
-            {/* Status */}
-            <div className="bg-white rounded-lg p-4 shadow-sm">
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-gray-600">Status</span>
-                <div className="flex items-center space-x-2">
-                  <div className={`w-2 h-2 rounded-full ${
-                    isRecording ? 'bg-red-500 animate-pulse' : 
-                    isPlaying ? 'bg-green-500 animate-pulse' : 
-                    isConnected ? 'bg-green-500' : 'bg-gray-300'
-                  }`} />
-                  <span className="text-sm text-gray-600">
-                    {isRecording ? 'Recording' : 
-                     isPlaying ? 'Playing' : 
-                     isConnected ? 'Ready' : 'Disconnected'}
-                  </span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Right Panel - Conversation */}
-          <div className="space-y-6">
-            {/* Current Transcript */}
-            <div className="bg-white rounded-lg p-6 shadow-sm">
-              <h3 className="text-lg font-semibold mb-4">Live Transcript</h3>
-              <div className="min-h-[100px] p-4 bg-gray-50 rounded border">
-                {transcript || (
-                  <span className="text-gray-400 italic">
-                    Start speaking to see the transcript here...
-                  </span>
-                )}
-              </div>
-            </div>
-
-            {/* Conversation History */}
-            <div className="bg-white rounded-lg p-6 shadow-sm">
-              <h3 className="text-lg font-semibold mb-4">Conversation</h3>
-              <div className="space-y-3 max-h-96 overflow-y-auto">
-                {conversationHistory.length === 0 ? (
-                  <div className="text-gray-400 italic text-center py-8">
-                    No conversation yet. Start speaking to begin!
-                  </div>
-                ) : (
-                  conversationHistory.map((message, index) => (
-                    <div
-                      key={index}
-                      className="p-3 bg-gray-50 rounded-lg"
-                    >
-                      {message}
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-
-            {/* Connection Info */}
-            <div className="bg-white rounded-lg p-4 shadow-sm">
-              <h4 className="font-semibold mb-2">Session Info</h4>
-              <div className="text-sm text-gray-600 space-y-1">
-                <div>Model: qwen3-omni-flash-realtime</div>
-                <div>Voice: Cherry</div>
-                <div>Audio Format: PCM16 → PCM24</div>
-                <div>Modalities: Text + Audio</div>
-              </div>
-            </div>
-          </div>
         </div>
       </div>
     </div>
