@@ -397,8 +397,15 @@ export default function OmniChat() {
   const isConnected = connectionStatus === 'connected';
   const isBrowserSupported = browserCompatibility?.getUserMedia && browserCompatibility?.webAudioAPI;
   
-  // 获取环境信息用于调试
-  const environmentInfo = getEnvironmentInfo();
+  // 环境信息状态，只在客户端初始化
+  const [environmentInfo, setEnvironmentInfo] = useState<any>(null);
+
+  // 在客户端初始化环境信息
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      setEnvironmentInfo(getEnvironmentInfo());
+    }
+  }, []);
 
   return (
     <div className="w-full max-w-4xl mx-auto p-4 md:p-6 bg-white rounded-xl shadow-lg my-8">
@@ -714,7 +721,7 @@ export default function OmniChat() {
            </div>
 
            {/* Debug Information Panel */}
-           {process.env.NODE_ENV === 'development' && (
+           {process.env.NODE_ENV === 'development' && environmentInfo && (
              <div className="mt-6 bg-gray-800 text-gray-300 rounded-lg p-4 text-xs font-mono">
                <div className="flex items-center gap-2 mb-2">
                  <AlertCircle size={14} />

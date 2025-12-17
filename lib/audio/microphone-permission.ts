@@ -6,6 +6,11 @@
  * 检测浏览器是否支持 getUserMedia
  */
 export const hasGetUserMedia = (): boolean => {
+  // 检查是否在浏览器环境中运行
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') {
+    return false;
+  }
+  
   return !!(
     navigator.mediaDevices &&
     navigator.mediaDevices.getUserMedia
@@ -16,6 +21,11 @@ export const hasGetUserMedia = (): boolean => {
  * 检测浏览器是否支持 Web Audio API
  */
 export const hasWebAudioAPI = (): boolean => {
+  // 检查是否在浏览器环境中运行
+  if (typeof window === 'undefined') {
+    return false;
+  }
+  
   return !!(
     window.AudioContext ||
     (window as any).webkitAudioContext
@@ -86,7 +96,8 @@ export async function requestMicrophonePermission(): Promise<boolean> {
  */
 export async function checkMicrophonePermission(): Promise<'granted' | 'denied' | 'prompt'> {
   try {
-    if (!navigator.permissions) {
+    // 检查是否在浏览器环境中运行
+    if (typeof navigator === 'undefined' || !navigator.permissions) {
       // 如果不支持 Permissions API，返回 'prompt'
       return 'prompt';
     }

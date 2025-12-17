@@ -175,6 +175,17 @@ export function getEnvironmentInfo(): {
   userAgent: string;
   webSocketSupported: boolean;
 } {
+  // 检查是否在浏览器环境中运行
+  if (typeof window === 'undefined') {
+    return {
+      protocol: 'unknown',
+      hostname: 'server',
+      secure: false,
+      userAgent: 'unknown',
+      webSocketSupported: false
+    };
+  }
+
   return {
     protocol: window.location.protocol,
     hostname: window.location.hostname,
