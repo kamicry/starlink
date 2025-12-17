@@ -5,6 +5,7 @@ export interface AudioCapturerOptions {
   sampleRate?: number;
   channels?: number;
   bufferSize?: number;
+  useContinuousCapture?: boolean;
   onData?: (audioData: Float32Array) => void;
   onError?: (error: string) => void;
 }
@@ -13,6 +14,7 @@ export class AudioCapturer {
   private audioContext: AudioContext | null = null;
   private mediaStream: MediaStream | null = null;
   private mediaRecorder: MediaRecorder | null = null;
+  private processor: ScriptProcessorNode | null = null;
   private analyser: AnalyserNode | null = null;
   private source: MediaStreamAudioSourceNode | null = null;
   private animationFrame: number | null = null;
@@ -24,6 +26,7 @@ export class AudioCapturer {
       sampleRate: options.sampleRate || APP_CONFIG.AUDIO.SAMPLE_RATE,
       channels: options.channels || APP_CONFIG.AUDIO.CHANNELS,
       bufferSize: options.bufferSize || APP_CONFIG.AUDIO.CHUNK_SIZE,
+      useContinuousCapture: options.useContinuousCapture || false,
       onData: options.onData,
       onError: options.onError
     };
@@ -89,30 +92,13 @@ export class AudioCapturer {
     try {
       this.isRecording = true;
       
-      // Create media recorder for high-quality audio
-      this.mediaRecorder = new MediaRecorder(this.mediaStream, {
-        mimeType: 'audio/webm;codecs=opus'
-      });
-
-      const audioChunks: Blob[] = [];
-
-      this.mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunks.push(event.data);
-        }
-      };
-
-      this.mediaRecorder.onstop = async () => {
-        const audioBlob = new Blob(audioChunks, { type: 'audio/webm;codecs=opus' });
-        const arrayBuffer = await audioBlob.arrayBuffer();
-        const audioData = await this.decodeAudioData(arrayBuffer);
-        
-        if (audioData && this.options.onData) {
-          this.options.onData(audioData);
-        }
-      };
-
-      this.mediaRecorder.start(100); // Collect data every 100ms
+      if (this.options.useContinuousCapture) {
+        // Use ScriptProcessorNode for continuous real-time capture
+        this.startContinuousCapture();
+      } else {
+        // Use MediaRecorder for buffered capture
+        this.startMediaRecorderCapture();
+      }
 
       // Start real-time audio analysis
       this.startAudioAnalysis();
@@ -128,6 +114,74 @@ export class AudioCapturer {
   }
 
   /**
+   * Start continuous capture using ScriptProcessorNode
+   */
+  private startContinuousCapture(): void {
+    if (!this.audioContext || !this.source || !this.analyser) {
+      throw new Error('Audio context not properly initialized');
+    }
+
+    // Create ScriptProcessor for continuous audio processing
+    const bufferSize = this.options.bufferSize || 4096;
+    this.processor = this.audioContext.createScriptProcessor(bufferSize, this.options.channels || 1, this.options.channels || 1);
+
+    // Connect: source -> analyser -> processor -> destination
+    this.processor.connect(this.audioContext.destination);
+
+    this.processor.onaudioprocess = (event) => {
+      if (!this.isRecording) {
+        return;
+      }
+
+      // Get mono audio data
+      const inputData = event.inputBuffer.getChannelData(0);
+      
+      // Call the onData callback with continuous audio data
+      if (this.options.onData) {
+        this.options.onData(new Float32Array(inputData));
+      }
+    };
+
+    console.log('Continuous capture mode enabled');
+  }
+
+  /**
+   * Start MediaRecorder-based capture
+   */
+  private startMediaRecorderCapture(): void {
+    if (!this.mediaStream) {
+      throw new Error('Media stream not available');
+    }
+
+    // Create media recorder for high-quality audio
+    this.mediaRecorder = new MediaRecorder(this.mediaStream, {
+      mimeType: 'audio/webm;codecs=opus'
+    });
+
+    const audioChunks: Blob[] = [];
+
+    this.mediaRecorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        audioChunks.push(event.data);
+      }
+    };
+
+    this.mediaRecorder.onstop = async () => {
+      const audioBlob = new Blob(audioChunks, { type: 'audio/webm;codecs=opus' });
+      const arrayBuffer = await audioBlob.arrayBuffer();
+      const audioData = await this.decodeAudioData(arrayBuffer);
+      
+      if (audioData && this.options.onData) {
+        this.options.onData(audioData);
+      }
+    };
+
+    this.mediaRecorder.start(100); // Collect data every 100ms
+
+    console.log('MediaRecorder capture mode enabled');
+  }
+
+  /**
    * Stop audio capture
    */
   stopCapture(): void {
@@ -140,6 +194,12 @@ export class AudioCapturer {
     if (this.animationFrame) {
       cancelAnimationFrame(this.animationFrame);
       this.animationFrame = null;
+    }
+
+    if (this.processor) {
+      this.processor.disconnect();
+      this.processor.onaudioprocess = null;
+      this.processor = null;
     }
 
     if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
@@ -268,5 +328,6 @@ export class AudioCapturer {
     this.source = null;
     this.analyser = null;
     this.mediaRecorder = null;
+    this.processor = null;
   }
 }

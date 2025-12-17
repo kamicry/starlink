@@ -97,6 +97,17 @@ export class PCMEncoder {
   }
 
   /**
+   * Encode single audio buffer to PCM16 ArrayBuffer
+   */
+  encodeSingleToBuffer(audioData: Float32Array): ArrayBuffer {
+    const int16Data = this.encodeSingle(audioData);
+    const buffer = new ArrayBuffer(int16Data.length * 2);
+    const view = new Int16Array(buffer);
+    view.set(int16Data);
+    return buffer;
+  }
+
+  /**
    * Convert audio data to WAV format
    */
   createWAVFromPCM(pcmFrames: PCMFrame[]): ArrayBuffer {
