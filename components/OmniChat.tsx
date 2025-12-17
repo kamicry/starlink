@@ -284,8 +284,6 @@ export default function OmniChat() {
           // 2.1 Update Session immediately after connection
           clientRef.current?.updateSession({
             voice: voice,
-            input_audio_format: 'pcm16',
-            output_audio_format: 'pcm24',
             instructions: '你是一个友好的 AI 助手，请自然地进行对话。'
           });
         },

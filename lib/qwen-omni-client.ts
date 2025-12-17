@@ -3,20 +3,51 @@ import { handleWebSocketError, generateRequestId, base64ToBytes } from './utils'
 
 // ========== TypeScript Interfaces ==========
 
+// 客户端会话配置接口
+export interface TurnDetectionConfig {
+  type: "server_vad";
+  threshold: number;                 // 0-1
+  prefix_padding_ms: number;
+  silence_duration_ms: number;
+}
+
+// 客户端会话配置接口（用户可配置的参数）
+export interface SessionConfig {
+  modalities?: ["text"] | ["text", "audio"];
+  voice?: string;                    // Cherry, Serena, etc.
+  instructions?: string;             // 系统指令
+  turnDetection?: TurnDetectionConfig | null; // VAD 模式配置
+  smoothOutput?: boolean | null;     // 口语化回复
+  temperature?: number;              // 0-2，越高越多样
+  topP?: number;                     // 0-1
+  topK?: number | null;              // >= 0
+  maxTokens?: number;
+  repetitionPenalty?: number;        // > 0
+  presencePenalty?: number;          // -2.0-2.0
+  seed?: number;                     // 0 to 2^31-1
+}
+
 export interface QwenOmniMessage {
   event_id: string;
   type: string;
   session?: {
-    modalities?: string[];
+    modalities?: ["text"] | ["text", "audio"];
     voice?: string;
     input_audio_format?: string;
     output_audio_format?: string;
     instructions?: string;
     temperature?: number;
+    topP?: number;
+    topK?: number | null;
     max_tokens?: number;
-    turn_detection?: any;
+    repetition_penalty?: number;
+    presence_penalty?: number;
+    seed?: number;
+    turn_detection?: TurnDetectionConfig | null;
+    smooth_output?: boolean | null;
   };
   audio?: string; // base64 encoded audio
+  image?: string; // base64 encoded image
   content?: string;
 }
 
@@ -179,6 +210,9 @@ export class QwenOmniClient {
   private maxReconnectAttempts: number = 5;
   private heartbeatInterval: NodeJS.Timeout | null = null;
   
+  // Event management
+  private eventCounter = 0;
+  
   // State management
   private _isResponding = false;
   private _currentResponseId: string | null = null;
@@ -200,12 +234,19 @@ export class QwenOmniClient {
 
   /**
    * Connect to the Qwen Omni WebSocket
+   * 支持API Key认证
    */
-  async connect(): Promise<void> {
+  async connect(url?: string, apiKey?: string): Promise<void> {
     return new Promise((resolve, reject) => {
       try {
-        const env = getEnvironmentConfig();
-        const wsUrl = `wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3-omni-flash-realtime`;
+        // 使用提供的API Key或构造函数中设置的API Key
+        const key = apiKey || this.apiKey;
+        if (!key) {
+          throw new Error('API Key is required');
+        }
+
+        // 如果没有提供URL，使用默认URL（API Key通过query参数传递）
+        const wsUrl = url || `wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3-omni-flash-realtime&authorization=Bearer ${key}`;
         this.ws = new WebSocket(wsUrl);
         
         this.ws.onopen = () => {
@@ -459,62 +500,69 @@ export class QwenOmniClient {
 
   /**
    * Send session update to initialize session
+   * 必须：连接后立即发送，作为第一个事件
    */
-  updateSession(config?: {
-    modalities?: string[];
-    voice?: string;
-    input_audio_format?: string;
-    output_audio_format?: string;
-    instructions?: string;
-    temperature?: number;
-    max_tokens?: number;
-    turn_detection?: any;
-  }): void {
-    if (!this.isConnected) {
-      console.warn('⚠️ WebSocket not connected, cannot update session');
-      return;
-    }
-
-    const message: QwenOmniMessage = {
-      event_id: generateRequestId(),
-      type: 'session.update',
-      session: {
-        modalities: config?.modalities || ['text', 'audio'],
-        voice: config?.voice || 'Cherry',
-        input_audio_format: config?.input_audio_format || 'pcm16',
-        output_audio_format: config?.output_audio_format || 'pcm24',
-        instructions: config?.instructions || '你是一个友好的 AI 助手，请自然地进行对话。',
-        temperature: config?.temperature || 0.7,
-        max_tokens: config?.max_tokens || 2048,
-        turn_detection: config?.turn_detection || {
-          type: 'server_vad',
-          threshold: 0.5,
-          prefix_padding_ms: 300,
-          silence_duration_ms: 500
-        }
+  async updateSession(config: SessionConfig): Promise<void> {
+    const event = {
+      "type": "session.update",
+      "session": {
+        // 必选字段
+        "modalities": config.modalities || ["text", "audio"],
+        "voice": config.voice || "Cherry",
+        "input_audio_format": "pcm16",  // 固定值
+        "output_audio_format": "pcm24", // 固定值
+        
+        // 可选字段 - 系统指令
+        "instructions": config.instructions || "你是一个友好的 AI 助手，请自然地进行对话。",
+        
+        // 可选字段 - VAD 模式配置（VAD 模式下服务端自动检测语音）
+        "turn_detection": config.turnDetection || {
+          "type": "server_vad",
+          "threshold": 0.1,              // VAD 灵敏度（0-1，越低越灵敏）
+          "prefix_padding_ms": 500,      // 前导填充（毫秒）
+          "silence_duration_ms": 900     // 停顿检测（毫秒）
+        },
+        
+        // 可选字段 - 输出模态特性
+        "smooth_output": config.smoothOutput !== undefined ? config.smoothOutput : true,
+        
+        // 可选字段 - 生成控制参数
+        "temperature": config.temperature !== undefined ? config.temperature : 0.9,
+        "top_p": config.topP !== undefined ? config.topP : 1.0,
+        "top_k": config.topK !== undefined ? config.topK : 50,
+        "max_tokens": config.maxTokens || 16384,
+        "repetition_penalty": config.repetitionPenalty || 1.05,
+        "presence_penalty": config.presencePenalty || 0.0,
+        "seed": config.seed !== undefined ? config.seed : -1
       }
     };
-
-    this.sendMessage(message);
+    
+    await this.sendEvent(event);
+    
+    console.log('✓ 会话配置已发送：');
+    console.log('  - 音色: ' + event.session.voice);
+    console.log('  - 指令: ' + event.session.instructions);
+    console.log('  - 温度: ' + event.session.temperature);
+    console.log('  - VAD 阈值: ' + event.session.turn_detection?.threshold);
   }
 
   /**
-   * Cancel current response (for interruption handling)
+   * 取消当前响应
+   * 用途：中断模型当前生成的响应
    */
   async cancelResponse(): Promise<void> {
-    if (!this.isConnected || !this._currentResponseId) {
-      console.warn('⚠️ No response to cancel');
+    if (!this._currentResponseId) {
+      console.warn('⚠ 没有正在进行的响应，无法取消');
       return;
     }
-
-    const message: QwenOmniMessage = {
-      event_id: generateRequestId(),
-      type: 'response.cancel',
-      content: this._currentResponseId
+    
+    const event = {
+      "type": "response.cancel"
     };
-
-    console.log('→ 取消当前回复');
-    this.sendMessage(message);
+    
+    await this.sendEvent(event);
+    console.log('⊗ 已取消响应');
+    
     this._isResponding = false;
     this._currentResponseId = null;
   }
@@ -522,69 +570,121 @@ export class QwenOmniClient {
   // ========== Audio Streaming Methods ==========
 
   /**
-   * Stream audio data to the server
+   * 追加音频数据
+   * 用途：持续发送音频块到服务端
+   * 格式：PCM16（16bit，16kHz，单声道）
    */
-  async streamAudio(pcm16Buffer: ArrayBuffer): Promise<void> {
-    if (!this.isConnected) {
-      console.warn('⚠️ WebSocket not connected, cannot stream audio');
-      return;
-    }
+  async streamAudio(audioData: ArrayBuffer): Promise<void> {
+    // 将 ArrayBuffer 转换为 Base64
+    const audioBase64 = this.arrayBufferToBase64(audioData);
+    
+    const event = {
+      "type": "input_audio_buffer.append",
+      "audio": audioBase64  // Base64 编码的 PCM16 数据
+    };
+    
+    await this.sendEvent(event);
+    
+    // 不输出日志（太频繁），可选调试
+    // console.log('▶ 发送音频块 (' + audioData.byteLength + ' 字节)');
+  }
 
-    // Convert ArrayBuffer to base64
-    const bytes = new Uint8Array(pcm16Buffer);
+  private arrayBufferToBase64(buffer: ArrayBuffer): string {
+    const bytes = new Uint8Array(buffer);
     let binary = '';
     for (let i = 0; i < bytes.byteLength; i++) {
       binary += String.fromCharCode(bytes[i]);
     }
-    const base64Audio = btoa(binary);
-
-    const message: QwenOmniMessage = {
-      event_id: generateRequestId(),
-      type: 'input_audio_buffer.append',
-      audio: base64Audio
-    };
-
-    this.sendMessage(message);
+    return btoa(binary);
   }
 
   /**
-   * Commit audio buffer to process the audio
+   * 提交音频缓冲区
+   * 用途：（仅 Manual 模式）手动提交缓冲区以触发处理
+   * VAD 模式：无需调用，服务端自动提交
    */
-  commitAudioBuffer(): void {
-    if (!this.isConnected) {
-      console.warn('⚠️ WebSocket not connected, cannot commit audio');
-      return;
-    }
-
-    const message: QwenOmniMessage = {
-      event_id: generateRequestId(),
-      type: 'input_audio_buffer.commit'
+  async commitAudioBuffer(): Promise<void> {
+    const event = {
+      "type": "input_audio_buffer.commit"
     };
-
-    this.sendMessage(message);
+    
+    await this.sendEvent(event);
+    console.log('✓ 音频缓冲区已提交');
   }
 
   /**
-   * Clear audio buffer
+   * 清除音频缓冲区
+   * 用途：清除当前缓冲区中的音频数据
    */
-  clearAudioBuffer(): void {
-    if (!this.isConnected) {
-      console.warn('⚠️ WebSocket not connected, cannot clear buffer');
-      return;
-    }
-
-    const message: QwenOmniMessage = {
-      event_id: generateRequestId(),
-      type: 'input_audio_buffer.clear'
+  async clearAudioBuffer(): Promise<void> {
+    const event = {
+      "type": "input_audio_buffer.clear"
     };
+    
+    await this.sendEvent(event);
+    console.log('✓ 音频缓冲区已清除');
+  }
 
-    this.sendMessage(message);
+  /**
+   * 请求创建响应
+   * 用途：（仅 Manual 模式）手动请求模型生成响应
+   * VAD 模式：无需调用，服务端自动生成
+   */
+  async createResponse(): Promise<void> {
+    const event = {
+      "type": "response.create"
+    };
+    
+    await this.sendEvent(event);
+    console.log('→ 已请求创建响应');
+  }
+
+  /**
+   * 追加图像数据（可选）
+   * 用途：（暂不使用）发送视频帧到服务端
+   */
+  async appendImage(imageData: ArrayBuffer): Promise<void> {
+    // 将 ArrayBuffer 转换为 Base64
+    const imageBase64 = this.arrayBufferToBase64(imageData);
+    
+    const event = {
+      "type": "input_image_buffer.append",
+      "image": imageBase64  // Base64 编码的 JPG/JPEG 数据
+    };
+    
+    await this.sendEvent(event);
+    console.log('▶ 发送图像帧 (' + imageData.byteLength + ' 字节)');
+  }
+
+  // ========== Event Management ==========
+
+  /**
+   * 生成唯一事件ID
+   */
+  private generateEventId(): string {
+    return `event_${Date.now()}_${++this.eventCounter}`;
+  }
+
+  /**
+   * 发送事件到服务端
+   * 检查WebSocket连接状态并添加事件ID
+   */
+  private async sendEvent(event: any): Promise<void> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error('WebSocket 未连接');
+    }
+    
+    // 生成事件 ID
+    event.event_id = this.generateEventId();
+    
+    console.log(`📤 发送事件: ${event.type}`, event);
+    this.ws.send(JSON.stringify(event));
   }
 
   // ========== Utility Methods ==========
 
   /**
-   * Send a message through WebSocket
+   * Send a message through WebSocket (向后兼容)
    */
   private sendMessage(message: QwenOmniMessage): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
