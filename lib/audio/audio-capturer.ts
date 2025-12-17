@@ -1,12 +1,22 @@
 import { APP_CONFIG } from '../constants';
-import { createAudioContext } from '../utils';
+import { createAudioContext, float32ToInt16, calculateAudioLevel } from '../utils';
 
 export interface AudioCapturerOptions {
   sampleRate?: number;
   channels?: number;
   bufferSize?: number;
+  chunkDurationMs?: number;
   useContinuousCapture?: boolean;
+
+  // Float32 frames (native AudioContext sample rate)
   onData?: (audioData: Float32Array) => void;
+
+  // PCM16 chunks for realtime streaming (e.g. Qwen input_audio_buffer.append)
+  onPCM16Chunk?: (buffer: ArrayBuffer) => void;
+
+  // For visualization
+  onAudioLevel?: (level: number) => void;
+
   onError?: (error: string) => void;
 }
 
@@ -21,13 +31,20 @@ export class AudioCapturer {
   private options: AudioCapturerOptions;
   private isRecording: boolean = false;
 
+  private floatBuffer: Float32Array[] = [];
+  private bufferedSampleCount: number = 0;
+  private silenceGain: GainNode | null = null;
+
   constructor(options: AudioCapturerOptions = {}) {
     this.options = {
       sampleRate: options.sampleRate || APP_CONFIG.AUDIO.SAMPLE_RATE,
       channels: options.channels || APP_CONFIG.AUDIO.CHANNELS,
-      bufferSize: options.bufferSize || APP_CONFIG.AUDIO.CHUNK_SIZE,
+      bufferSize: options.bufferSize || 4096,
+      chunkDurationMs: options.chunkDurationMs || 100,
       useContinuousCapture: options.useContinuousCapture || false,
       onData: options.onData,
+      onPCM16Chunk: options.onPCM16Chunk,
+      onAudioLevel: options.onAudioLevel,
       onError: options.onError
     };
   }
@@ -121,28 +138,56 @@ export class AudioCapturer {
       throw new Error('Audio context not properly initialized');
     }
 
-    // Create ScriptProcessor for continuous audio processing
     const bufferSize = this.options.bufferSize || 4096;
-    this.processor = this.audioContext.createScriptProcessor(bufferSize, this.options.channels || 1, this.options.channels || 1);
 
-    // Connect: source -> analyser -> processor -> destination
-    this.processor.connect(this.audioContext.destination);
+    // ScriptProcessor buffer size must be a power of two.
+    this.processor = this.audioContext.createScriptProcessor(bufferSize, 1, 1);
+
+    // Prevent mic audio from being played through speakers.
+    this.silenceGain = this.audioContext.createGain();
+    this.silenceGain.gain.value = 0;
+
+    // Connect graph: source -> analyser -> processor -> (silence) -> destination
+    // source -> analyser is already connected in initialize().
+    this.analyser.connect(this.processor);
+    this.processor.connect(this.silenceGain);
+    this.silenceGain.connect(this.audioContext.destination);
+
+    this.floatBuffer = [];
+    this.bufferedSampleCount = 0;
+
+    const targetSampleRate = this.options.sampleRate || APP_CONFIG.AUDIO.SAMPLE_RATE;
+    const chunkDurationMs = this.options.chunkDurationMs || 100;
+    const chunkSamples = Math.floor(targetSampleRate * chunkDurationMs / 1000);
 
     this.processor.onaudioprocess = (event) => {
-      if (!this.isRecording) {
+      if (!this.isRecording || !this.audioContext) {
         return;
       }
 
-      // Get mono audio data
       const inputData = event.inputBuffer.getChannelData(0);
-      
-      // Call the onData callback with continuous audio data
-      if (this.options.onData) {
-        this.options.onData(new Float32Array(inputData));
+      const floatFrame = new Float32Array(inputData);
+
+      this.options.onData?.(floatFrame);
+
+      const audioLevel = calculateAudioLevel(floatFrame);
+      this.options.onAudioLevel?.(audioLevel);
+
+      const processedFrame = this.resampleIfNeeded(floatFrame, this.audioContext.sampleRate, targetSampleRate);
+
+      this.floatBuffer.push(processedFrame);
+      this.bufferedSampleCount += processedFrame.length;
+
+      while (this.bufferedSampleCount >= chunkSamples) {
+        const chunk = this.extractChunk(chunkSamples);
+        const pcm16 = float32ToInt16(chunk);
+        const buffer = new ArrayBuffer(pcm16.length * 2);
+        new Int16Array(buffer).set(pcm16);
+        this.options.onPCM16Chunk?.(buffer);
       }
     };
 
-    console.log('Continuous capture mode enabled');
+    console.log(`Continuous capture mode enabled (${chunkDurationMs}ms chunks)`);
   }
 
   /**
@@ -197,10 +242,34 @@ export class AudioCapturer {
     }
 
     if (this.processor) {
-      this.processor.disconnect();
+      try {
+        this.processor.disconnect();
+      } catch {
+        // ignore
+      }
       this.processor.onaudioprocess = null;
       this.processor = null;
     }
+
+    if (this.analyser) {
+      try {
+        this.analyser.disconnect();
+      } catch {
+        // ignore
+      }
+    }
+
+    if (this.silenceGain) {
+      try {
+        this.silenceGain.disconnect();
+      } catch {
+        // ignore
+      }
+      this.silenceGain = null;
+    }
+
+    this.floatBuffer = [];
+    this.bufferedSampleCount = 0;
 
     if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
       this.mediaRecorder.stop();
@@ -235,13 +304,7 @@ export class AudioCapturer {
       const rms = Math.sqrt(sum / dataArray.length);
       const audioLevel = Math.min(100, rms * 200);
 
-      // Emit audio level for real-time visualization
-      if (this.options.onData) {
-        // Create a small buffer with the current audio level
-        const buffer = new Float32Array(1);
-        buffer[0] = audioLevel / 100;
-        this.options.onData(buffer);
-      }
+      this.options.onAudioLevel?.(audioLevel);
 
       this.animationFrame = requestAnimationFrame(analyze);
     };
@@ -289,6 +352,51 @@ export class AudioCapturer {
     return result;
   }
 
+  private resampleIfNeeded(inputData: Float32Array, inputSampleRate: number, targetSampleRate: number): Float32Array {
+    if (inputSampleRate === targetSampleRate) {
+      return inputData;
+    }
+
+    const ratio = targetSampleRate / inputSampleRate;
+    const outputLength = Math.floor(inputData.length * ratio);
+    const output = new Float32Array(outputLength);
+
+    for (let i = 0; i < outputLength; i++) {
+      const srcIndex = i / ratio;
+      const srcIndexFloor = Math.floor(srcIndex);
+      const srcIndexCeil = Math.min(srcIndexFloor + 1, inputData.length - 1);
+      const fraction = srcIndex - srcIndexFloor;
+
+      output[i] = inputData[srcIndexFloor] * (1 - fraction) + inputData[srcIndexCeil] * fraction;
+    }
+
+    return output;
+  }
+
+  private extractChunk(chunkSize: number): Float32Array {
+    const chunk = new Float32Array(chunkSize);
+    let chunkIndex = 0;
+
+    while (chunkIndex < chunkSize && this.floatBuffer.length > 0) {
+      const buffer = this.floatBuffer[0];
+      const remaining = chunkSize - chunkIndex;
+
+      if (buffer.length <= remaining) {
+        chunk.set(buffer, chunkIndex);
+        chunkIndex += buffer.length;
+        this.floatBuffer.shift();
+        this.bufferedSampleCount -= buffer.length;
+      } else {
+        chunk.set(buffer.slice(0, remaining), chunkIndex);
+        this.floatBuffer[0] = buffer.slice(remaining);
+        chunkIndex += remaining;
+        this.bufferedSampleCount -= remaining;
+      }
+    }
+
+    return chunk;
+  }
+
   /**
    * Get current audio level (0-100)
    */
@@ -329,5 +437,8 @@ export class AudioCapturer {
     this.analyser = null;
     this.mediaRecorder = null;
     this.processor = null;
+    this.silenceGain = null;
+    this.floatBuffer = [];
+    this.bufferedSampleCount = 0;
   }
 }

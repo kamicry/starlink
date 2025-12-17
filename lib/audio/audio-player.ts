@@ -22,6 +22,10 @@ export class AudioPlayer {
   private playbackStartTime: number = 0;
   private pauseOffset: number = 0;
 
+  // Streaming (chunked) playback: schedule AudioBufferSourceNodes back-to-back.
+  private scheduledSources: Set<AudioBufferSourceNode> = new Set();
+  private nextScheduledTime: number = 0;
+
   constructor(options: AudioPlayerOptions = {}) {
     this.options = {
       sampleRate: options.sampleRate || APP_CONFIG.AUDIO.SAMPLE_RATE,
@@ -96,6 +100,32 @@ export class AudioPlayer {
       this.options.onError?.(errorMessage);
       throw error;
     }
+  }
+
+  /**
+   * Enqueue Float32 PCM chunk for continuous playback.
+   */
+  enqueueFloat32Chunk(audioData: Float32Array, sampleRate?: number): void {
+    if (!this.audioContext) {
+      throw new Error('Audio player not initialized');
+    }
+
+    const audioBuffer = this.audioContext.createBuffer(
+      this.options.channels || APP_CONFIG.AUDIO.CHANNELS,
+      audioData.length,
+      sampleRate || this.options.sampleRate || APP_CONFIG.AUDIO.SAMPLE_RATE
+    );
+
+    const channelData = new Float32Array(audioData);
+    if ((this.options.channels || APP_CONFIG.AUDIO.CHANNELS) === 1) {
+      audioBuffer.copyToChannel(channelData, 0);
+    } else {
+      for (let channel = 0; channel < (this.options.channels || APP_CONFIG.AUDIO.CHANNELS); channel++) {
+        audioBuffer.copyToChannel(channelData, channel);
+      }
+    }
+
+    this.enqueueAudioBuffer(audioBuffer);
   }
 
   /**
@@ -202,13 +232,28 @@ export class AudioPlayer {
   }
 
   /**
-   * Stop playback
+   * Stop playback (also stops any scheduled streaming chunks)
    */
   stop(): void {
     if (this.currentSource) {
-      this.currentSource.stop();
+      try {
+        this.currentSource.stop();
+      } catch {
+        // ignore
+      }
       this.currentSource = null;
     }
+
+    for (const source of this.scheduledSources) {
+      try {
+        source.onended = null;
+        source.stop();
+      } catch {
+        // ignore
+      }
+    }
+    this.scheduledSources.clear();
+    this.nextScheduledTime = 0;
 
     this.isPlaying = false;
     this.pauseOffset = 0;
@@ -275,7 +320,51 @@ export class AudioPlayer {
   }
 
   /**
-   * Add audio to playback queue
+   * Enqueue a chunk for continuous, gapless playback.
+   *
+   * This is intended for streaming audio (e.g. `response.audio.delta`).
+   */
+  enqueueAudioBuffer(audioBuffer: AudioBuffer): void {
+    if (!this.audioContext || !this.gainNode) {
+      throw new Error('Audio player not initialized');
+    }
+
+    if (this.audioContext.state === 'suspended') {
+      this.audioContext.resume().catch(() => {
+        // ignore
+      });
+    }
+
+    const now = this.audioContext.currentTime;
+    const startTime = Math.max(this.nextScheduledTime, now + 0.02);
+
+    const source = this.audioContext.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(this.gainNode);
+
+    if (!this.isPlaying) {
+      this.isPlaying = true;
+      this.playbackStartTime = startTime;
+      this.options.onPlay?.();
+    }
+
+    source.onended = () => {
+      this.scheduledSources.delete(source);
+
+      if (this.scheduledSources.size === 0) {
+        this.isPlaying = false;
+        this.nextScheduledTime = 0;
+        this.options.onEnded?.();
+      }
+    };
+
+    this.scheduledSources.add(source);
+    source.start(startTime);
+    this.nextScheduledTime = startTime + audioBuffer.duration;
+  }
+
+  /**
+   * Add audio to playback queue (non-streaming mode)
    */
   addToQueue(audioBuffer: AudioBuffer): void {
     this.queue.push(audioBuffer);
@@ -306,10 +395,23 @@ export class AudioPlayer {
   }
 
   /**
-   * Clear playback queue
+   * Clear playback queue.
+   *
+   * Note: for streaming playback, this also cancels any scheduled (not-yet-ended) sources.
    */
   clearQueue(): void {
     this.queue = [];
+
+    for (const source of this.scheduledSources) {
+      try {
+        source.onended = null;
+        source.stop();
+      } catch {
+        // ignore
+      }
+    }
+    this.scheduledSources.clear();
+    this.nextScheduledTime = 0;
   }
 
   /**
@@ -327,7 +429,7 @@ export class AudioPlayer {
       currentTime: this.getCurrentTime(),
       duration: this.getDuration(),
       volume: this.getVolume(),
-      queueLength: this.queue.length
+      queueLength: this.queue.length + this.scheduledSources.size
     };
   }
 

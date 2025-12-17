@@ -1,21 +1,30 @@
-import { APP_CONFIG, getEnvironmentConfig } from './constants';
 import { handleWebSocketError, generateRequestId } from './utils';
 
-// Qwen-Omni-Realtime specific interfaces
+export interface QwenOmniTurnDetectionConfig {
+  type: 'server_vad' | string;
+  threshold?: number;
+  prefix_padding_ms?: number;
+  silence_duration_ms?: number;
+}
+
+export interface QwenOmniSessionConfig {
+  modalities?: string[];
+  voice?: string;
+  instructions?: string;
+  input_audio_format?: string;
+  output_audio_format?: string;
+  input_audio_transcription?: {
+    model: string;
+  };
+  turn_detection?: QwenOmniTurnDetectionConfig | null;
+}
 
 export interface QwenOmniMessage {
   event_id: string;
   type: string;
-  session?: {
-    modalities?: string[];
-    voice?: string;
-    input_audio_format?: string;
-    output_audio_format?: string;
-    instructions?: string;
-    turn_detection?: any;
-  };
-  audio?: string; // base64 encoded audio
-  content?: string;
+  session?: QwenOmniSessionConfig;
+  audio?: string;
+  [key: string]: any;
 }
 
 export interface QwenOmniResponse {
@@ -24,6 +33,9 @@ export interface QwenOmniResponse {
   session?: {
     id: string;
   };
+  response?: {
+    id?: string;
+  };
   transcript?: {
     delta?: string;
     text?: string;
@@ -31,64 +43,101 @@ export interface QwenOmniResponse {
   audio?: {
     delta?: string;
   };
-  usage?: {
-    input_tokens: number;
-    output_tokens: number;
-    total_tokens: number;
-  };
+  delta?: string;
+  text?: string;
   error?: {
     message: string;
     type: string;
   };
+  [key: string]: any;
 }
 
-// Event callback types
 export interface QwenOmniCallbacks {
   onSessionCreated?: (sessionId: string) => void;
   onSessionUpdated?: () => void;
+
   onSpeechStarted?: () => void;
   onSpeechStopped?: () => void;
   onAudioCommitted?: () => void;
+
+  onResponseCreated?: (responseId?: string) => void;
+  onResponseDone?: () => void;
+
   onAudioTranscriptDelta?: (delta: string) => void;
   onAudioTranscriptDone?: (text: string) => void;
+
+  onInputAudioTranscriptionCompleted?: (text: string) => void;
+
   onAudioData?: (audioData: ArrayBuffer) => void;
   onAudioDone?: () => void;
-  onResponseDone?: () => void;
+
   onError?: (error: string, type?: string) => void;
   onOpen?: () => void;
   onClose?: () => void;
+}
+
+export interface QwenOmniConnectOptions {
+  model?: string;
+  sessionConfig?: QwenOmniSessionConfig;
 }
 
 export class QwenOmniClient {
   private ws: WebSocket | null = null;
   private callbacks: QwenOmniCallbacks;
   private apiKey: string;
-  private eventId: string = '';
-  private isConnected: boolean = false;
-  private reconnectAttempts: number = 0;
-  private maxReconnectAttempts: number = 5;
-  private heartbeatInterval: NodeJS.Timeout | null = null;
+
+  private isConnected = false;
+  private sessionId: string | null = null;
+
+  private shouldReconnect = true;
+  private reconnectAttempts = 0;
+  private maxReconnectAttempts = 5;
+  private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+
+  private isResponding = false;
+  private currentResponseId: string | null = null;
 
   constructor(apiKey: string, callbacks: QwenOmniCallbacks = {}) {
     this.callbacks = callbacks;
     this.apiKey = apiKey;
   }
 
-  /**
-   * Connect to the Qwen Omni WebSocket
-   */
-  async connect(): Promise<void> {
+  async connect(options: QwenOmniConnectOptions = {}): Promise<void> {
+    if (typeof window === 'undefined') {
+      throw new Error('QwenOmniClient.connect() must be called in a browser environment');
+    }
+
+    if (this.ws && this.isConnected) {
+      return;
+    }
+
+    const model = options.model || 'qwen3-omni-flash-realtime';
+
+    const url = new URL('wss://dashscope.aliyuncs.com/api-ws/v1/realtime');
+    url.searchParams.set('model', model);
+
+    // Browser WebSocket cannot set headers; try passing api_key via query param.
+    // If the backend ignores this parameter, the server may still reject requests.
+    if (this.apiKey) {
+      url.searchParams.set('api_key', this.apiKey);
+    }
+
+    this.shouldReconnect = true;
+
     return new Promise((resolve, reject) => {
       try {
-        const wsUrl = `wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3-omni-flash-realtime`;
-        this.ws = new WebSocket(wsUrl);
-        
+        this.ws = new WebSocket(url.toString());
+
         this.ws.onopen = () => {
-          console.log('Qwen-Omni WebSocket connected');
           this.isConnected = true;
           this.reconnectAttempts = 0;
           this.startHeartbeat();
           this.callbacks.onOpen?.();
+
+          if (options.sessionConfig) {
+            this.updateSession(options.sessionConfig);
+          }
+
           resolve();
         };
 
@@ -103,11 +152,16 @@ export class QwenOmniClient {
         };
 
         this.ws.onclose = (event) => {
-          console.log('Qwen-Omni WebSocket closed:', event.code, event.reason);
           this.isConnected = false;
           this.stopHeartbeat();
           this.callbacks.onClose?.();
-          this.handleReconnect();
+
+          if (this.shouldReconnect) {
+            this.handleReconnect();
+          }
+
+          // Helpful log
+          console.log('Qwen-Omni WebSocket closed:', event.code, event.reason);
         };
 
         this.ws.onerror = (error) => {
@@ -115,90 +169,44 @@ export class QwenOmniClient {
           this.callbacks.onError?.('WebSocket connection error');
           reject(error);
         };
-
       } catch (error) {
         reject(error);
       }
     });
   }
 
-  /**
-   * Handle incoming WebSocket messages
-   */
-  private handleMessage(response: QwenOmniResponse): void {
-    console.log('Received message:', response);
+  disconnect(): void {
+    this.shouldReconnect = false;
 
-    switch (response.type) {
-      case 'session.created':
-        if (response.session?.id) {
-          this.callbacks.onSessionCreated?.(response.session.id);
-        }
-        break;
-
-      case 'session.updated':
-        this.callbacks.onSessionUpdated?.();
-        break;
-
-      case 'input_audio_buffer.speech_started':
-        this.callbacks.onSpeechStarted?.();
-        break;
-
-      case 'input_audio_buffer.speech_stopped':
-        this.callbacks.onSpeechStopped?.();
-        break;
-
-      case 'input_audio_buffer.committed':
-        this.callbacks.onAudioCommitted?.();
-        break;
-
-      case 'response.audio_transcript.delta':
-        if (response.transcript?.delta) {
-          this.callbacks.onAudioTranscriptDelta?.(response.transcript.delta);
-        }
-        break;
-
-      case 'response.audio_transcript.done':
-        if (response.transcript?.text) {
-          this.callbacks.onAudioTranscriptDone?.(response.transcript.text);
-        }
-        break;
-
-      case 'response.audio.delta':
-        if (response.audio?.delta) {
-          const audioBuffer = this.base64ToArrayBuffer(response.audio.delta);
-          this.callbacks.onAudioData?.(audioBuffer);
-        }
-        break;
-
-      case 'response.audio.done':
-        this.callbacks.onAudioDone?.();
-        break;
-
-      case 'response.done':
-        this.callbacks.onResponseDone?.();
-        break;
-
-      case 'error':
-        if (response.error) {
-          this.callbacks.onError?.(response.error.message, response.error.type);
-        }
-        break;
-
-      default:
-        console.log('Unhandled message type:', response.type);
+    if (this.ws) {
+      this.stopHeartbeat();
+      try {
+        this.ws.close(1000, 'Client disconnect');
+      } catch {
+        // ignore
+      }
+      this.ws = null;
     }
+
+    this.isConnected = false;
+    this.sessionId = null;
+    this.isResponding = false;
+    this.currentResponseId = null;
   }
 
-  /**
-   * Send session update to initialize session
-   */
-  updateSession(config?: {
-    modalities?: string[];
-    voice?: string;
-    input_audio_format?: string;
-    output_audio_format?: string;
-    instructions?: string;
-  }): void {
+  getConnectionStatus(): boolean {
+    return this.isConnected;
+  }
+
+  getSessionId(): string | null {
+    return this.sessionId;
+  }
+
+  getIsResponding(): boolean {
+    return this.isResponding;
+  }
+
+  updateSession(config: QwenOmniSessionConfig = {}): void {
     if (!this.isConnected) {
       console.warn('WebSocket not connected, cannot update session');
       return;
@@ -208,24 +216,21 @@ export class QwenOmniClient {
       event_id: generateRequestId(),
       type: 'session.update',
       session: {
-        modalities: config?.modalities || ['text', 'audio'],
-        voice: config?.voice || 'Cherry',
-        input_audio_format: config?.input_audio_format || 'pcm16',
-        output_audio_format: config?.output_audio_format || 'pcm24',
-        instructions: config?.instructions || '你是一个友好的 AI 助手，请自然地进行对话。',
-        turn_detection: null
+        modalities: config.modalities || ['text', 'audio'],
+        voice: config.voice || 'Cherry',
+        input_audio_format: config.input_audio_format || 'pcm16',
+        output_audio_format: config.output_audio_format || 'pcm24',
+        instructions: config.instructions || '你是一个友好的 AI 助手，请自然地进行对话。',
+        input_audio_transcription: config.input_audio_transcription,
+        turn_detection: config.turn_detection ?? null
       }
     };
 
     this.sendMessage(message);
   }
 
-  /**
-   * Append audio to input buffer
-   */
   appendAudio(audioData: ArrayBuffer): void {
     if (!this.isConnected) {
-      console.warn('WebSocket not connected, cannot append audio');
       return;
     }
 
@@ -238,12 +243,8 @@ export class QwenOmniClient {
     this.sendMessage(message);
   }
 
-  /**
-   * Commit audio buffer
-   */
   commit(): void {
     if (!this.isConnected) {
-      console.warn('WebSocket not connected, cannot commit audio');
       return;
     }
 
@@ -255,12 +256,21 @@ export class QwenOmniClient {
     this.sendMessage(message);
   }
 
-  /**
-   * Finish session
-   */
+  cancelResponse(): void {
+    if (!this.isConnected) {
+      return;
+    }
+
+    const message: QwenOmniMessage = {
+      event_id: generateRequestId(),
+      type: 'response.cancel'
+    };
+
+    this.sendMessage(message);
+  }
+
   finish(): void {
     if (!this.isConnected) {
-      console.warn('WebSocket not connected, cannot finish session');
       return;
     }
 
@@ -272,38 +282,150 @@ export class QwenOmniClient {
     this.sendMessage(message);
   }
 
-  /**
-   * Send a message through WebSocket
-   */
+  addEventListener(event: keyof QwenOmniCallbacks, callback: Function): void {
+    (this.callbacks as any)[event] = callback;
+  }
+
+  removeEventListener(event: keyof QwenOmniCallbacks): void {
+    (this.callbacks as any)[event] = undefined;
+  }
+
+  setApiKey(apiKey: string): void {
+    this.apiKey = apiKey;
+  }
+
+  private handleMessage(response: QwenOmniResponse): void {
+    switch (response.type) {
+      case 'session.created': {
+        if (response.session?.id) {
+          this.sessionId = response.session.id;
+          this.callbacks.onSessionCreated?.(response.session.id);
+        }
+        break;
+      }
+
+      case 'session.updated': {
+        this.callbacks.onSessionUpdated?.();
+        break;
+      }
+
+      case 'input_audio_buffer.speech_started': {
+        this.callbacks.onSpeechStarted?.();
+
+        // Interruption: if assistant is still responding, cancel the previous response.
+        if (this.isResponding) {
+          this.cancelResponse();
+          this.isResponding = false;
+          this.currentResponseId = null;
+        }
+        break;
+      }
+
+      case 'input_audio_buffer.speech_stopped': {
+        this.callbacks.onSpeechStopped?.();
+        break;
+      }
+
+      case 'input_audio_buffer.committed': {
+        this.callbacks.onAudioCommitted?.();
+        break;
+      }
+
+      case 'response.created': {
+        this.isResponding = true;
+        this.currentResponseId = response.response?.id || null;
+        this.callbacks.onResponseCreated?.(this.currentResponseId || undefined);
+        break;
+      }
+
+      case 'response.audio.delta': {
+        const base64 = response.audio?.delta || response.delta;
+        if (typeof base64 === 'string') {
+          const audioBuffer = this.base64ToArrayBuffer(base64);
+          this.callbacks.onAudioData?.(audioBuffer);
+        }
+        break;
+      }
+
+      case 'response.audio.done': {
+        this.callbacks.onAudioDone?.();
+        break;
+      }
+
+      case 'response.audio_transcript.delta': {
+        const delta = response.transcript?.delta || response.delta;
+        if (typeof delta === 'string') {
+          this.callbacks.onAudioTranscriptDelta?.(delta);
+        }
+        break;
+      }
+
+      case 'response.audio_transcript.done': {
+        const text = response.transcript?.text || response.text;
+        if (typeof text === 'string') {
+          this.callbacks.onAudioTranscriptDone?.(text);
+        }
+        break;
+      }
+
+      case 'conversation.item.input_audio_transcription.completed': {
+        const text =
+          (typeof response.transcript === 'string' ? response.transcript : undefined) ||
+          (typeof (response as any).transcription === 'string' ? (response as any).transcription : undefined) ||
+          (typeof response.text === 'string' ? response.text : undefined) ||
+          (typeof (response as any).transcript?.text === 'string' ? (response as any).transcript.text : undefined);
+
+        if (text) {
+          this.callbacks.onInputAudioTranscriptionCompleted?.(text);
+        }
+        break;
+      }
+
+      case 'response.done': {
+        this.isResponding = false;
+        this.currentResponseId = null;
+        this.callbacks.onResponseDone?.();
+        break;
+      }
+
+      case 'error': {
+        if (response.error) {
+          this.callbacks.onError?.(response.error.message, response.error.type);
+        } else {
+          this.callbacks.onError?.('Unknown error');
+        }
+        break;
+      }
+
+      default: {
+        // Keep quiet in production; log in dev
+        if (process.env.NODE_ENV === 'development') {
+          console.log('Unhandled message type:', response.type, response);
+        }
+      }
+    }
+  }
+
   private sendMessage(message: QwenOmniMessage): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      console.log('Sending message:', message);
       this.ws.send(JSON.stringify(message));
     }
   }
 
-  /**
-   * Handle reconnection logic
-   */
   private handleReconnect(): void {
     if (this.reconnectAttempts < this.maxReconnectAttempts) {
       this.reconnectAttempts++;
-      console.log(`Attempting to reconnect... (${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
-      
+
       setTimeout(() => {
-        this.connect().catch(error => {
+        this.connect().catch((error) => {
           handleWebSocketError(error, 'reconnection');
         });
       }, 1000 * this.reconnectAttempts);
     } else {
-      console.error('Max reconnection attempts reached');
       this.callbacks.onError?.('Max reconnection attempts reached');
     }
   }
 
-  /**
-   * Start heartbeat to keep connection alive
-   */
   private startHeartbeat(): void {
     this.heartbeatInterval = setInterval(() => {
       if (this.isConnected && this.ws) {
@@ -313,12 +435,9 @@ export class QwenOmniClient {
         };
         this.sendMessage(heartbeatMessage);
       }
-    }, 30000); // Send ping every 30 seconds
+    }, 30000);
   }
 
-  /**
-   * Stop heartbeat
-   */
   private stopHeartbeat(): void {
     if (this.heartbeatInterval) {
       clearInterval(this.heartbeatInterval);
@@ -326,28 +445,6 @@ export class QwenOmniClient {
     }
   }
 
-  /**
-   * Disconnect WebSocket
-   */
-  disconnect(): void {
-    if (this.ws) {
-      this.stopHeartbeat();
-      this.ws.close(1000, 'Client disconnect');
-      this.ws = null;
-      this.isConnected = false;
-    }
-  }
-
-  /**
-   * Get connection status
-   */
-  getConnectionStatus(): boolean {
-    return this.isConnected;
-  }
-
-  /**
-   * Utility: Convert ArrayBuffer to base64
-   */
   private arrayBufferToBase64(buffer: ArrayBuffer): string {
     const bytes = new Uint8Array(buffer);
     let binary = '';
@@ -357,9 +454,6 @@ export class QwenOmniClient {
     return btoa(binary);
   }
 
-  /**
-   * Utility: Convert base64 to ArrayBuffer
-   */
   private base64ToArrayBuffer(base64: string): ArrayBuffer {
     const binaryString = atob(base64);
     const bytes = new Uint8Array(binaryString.length);
@@ -367,33 +461,5 @@ export class QwenOmniClient {
       bytes[i] = binaryString.charCodeAt(i);
     }
     return bytes.buffer;
-  }
-
-  /**
-   * Add event listener
-   */
-  addEventListener(event: keyof QwenOmniCallbacks, callback: Function): void {
-    (this.callbacks as any)[event] = callback;
-  }
-
-  /**
-   * Remove event listener
-   */
-  removeEventListener(event: keyof QwenOmniCallbacks): void {
-    (this.callbacks as any)[event] = undefined;
-  }
-
-  /**
-   * Get current session ID
-   */
-  getSessionId(): string {
-    return this.eventId;
-  }
-
-  /**
-   * Set custom API key
-   */
-  setApiKey(apiKey: string): void {
-    this.apiKey = apiKey;
   }
 }

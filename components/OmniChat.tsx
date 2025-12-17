@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Mic, MicOff, Volume2, VolumeX, Wifi, WifiOff, Play, Pause, Trash2, Activity, Loader2, Shield, ShieldCheck, AlertCircle, RefreshCw } from 'lucide-react';
+import { Mic, MicOff, Volume2, VolumeX, Wifi, WifiOff, Play, Trash2, Activity, Loader2, Shield, ShieldCheck, AlertCircle, RefreshCw } from 'lucide-react';
 import { QwenOmniClient, QwenOmniCallbacks } from '../lib/qwen-omni-client';
 import { PCMDecoder } from '../lib/audio/pcm-decoder';
 import { AudioPlayer } from '../lib/audio/audio-player';
@@ -24,7 +24,6 @@ export default function OmniChat() {
   const [conversationHistory, setConversationHistory] = useState<{role: 'user' | 'assistant', text: string}[]>([]);
   const [volume, setVolume] = useState(0.7);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [isPaused, setIsPaused] = useState(false);
   const [voice, setVoice] = useState('Cherry');
   
   // 权限和连接测试状态
@@ -79,16 +78,9 @@ export default function OmniChat() {
           autoPlay: false,
           onPlay: () => {
             setAppStatus('speaking');
-            setIsPaused(false);
-          },
-          onPause: () => {
-            setIsPaused(true);
           },
           onEnded: () => {
-            if (connectionStatus === 'connected') {
-              setAppStatus('idle'); // Or back to listening if we were in continuous mode
-            }
-            setIsPaused(false);
+            setAppStatus('listening');
           },
           onError: (error) => {
             console.error('Audio player error:', error);
@@ -231,26 +223,14 @@ export default function OmniChat() {
     if (!pcmDecoderRef.current || !audioPlayerRef.current) return;
 
     try {
-      // Decode PCM24
       const float32Audio = pcmDecoderRef.current.decodePCM(audioData, 24);
-      
-      if (float32Audio.length > 0) {
-        // Create AudioBuffer
-        const playbackBuffer = pcmDecoderRef.current.createAudioBuffer(float32Audio);
-        
-        // Add to queue
-        audioPlayerRef.current.addToQueue(playbackBuffer);
-        
-        // Auto-play if not playing
-        const status = audioPlayerRef.current.getStatus();
-        if (!status.isPlaying && !isPaused && status.queueLength === 1) {
-          audioPlayerRef.current.play().catch(e => console.error("Auto-play failed", e));
-        }
-      }
+      if (float32Audio.length === 0) return;
+
+      audioPlayerRef.current.enqueueFloat32Chunk(float32Audio, 24000);
     } catch (error) {
       console.error('Error processing audio data:', error);
     }
-  }, [isPaused]);
+  }, []);
 
   // Start Voice Session
   const startSession = async () => {
@@ -280,18 +260,29 @@ export default function OmniChat() {
         onOpen: () => {
           console.log('Connected to Qwen-Omni');
           setConnectionStatus('connected');
-          
-          // 2.1 Update Session immediately after connection
+
+          // 2.1 VAD (server_vad) session config
           clientRef.current?.updateSession({
+            modalities: ['text', 'audio'],
             voice: voice,
+            instructions: '你是小云，风趣幽默的好助手，请自然地进行对话。',
             input_audio_format: 'pcm16',
             output_audio_format: 'pcm24',
-            instructions: 'You are a helpful AI assistant.'
+            input_audio_transcription: {
+              model: 'gummy-realtime-v1'
+            },
+            turn_detection: {
+              type: 'server_vad',
+              threshold: 0.1,
+              prefix_padding_ms: 500,
+              silence_duration_ms: 900
+            }
           });
         },
-        
+
         onSessionCreated: (sessionId) => {
           console.log('Session created:', sessionId);
+
           // 3. Start Capture after session is ready
           audioProcessorRef.current?.startCapture().then(() => {
             setAppStatus('listening');
@@ -322,30 +313,45 @@ export default function OmniChat() {
           }
         },
         
+        onResponseCreated: () => {
+          setTranscript('');
+          setAppStatus('processing');
+        },
+
+        onInputAudioTranscriptionCompleted: (text) => {
+          setConversationHistory(prev => [...prev, { role: 'user', text }]);
+        },
+
         onAudioTranscriptDelta: (delta) => {
           setTranscript(prev => prev + delta);
           setAppStatus('processing');
         },
-        
+
         onAudioTranscriptDone: (text) => {
-           // Move current transcript to history
-           setTranscript('');
-           setConversationHistory(prev => [...prev, { role: 'assistant', text }]);
+          setTranscript('');
+          if (text) {
+            setConversationHistory(prev => [...prev, { role: 'assistant', text }]);
+          }
+        },
+
+        onResponseDone: () => {
+          setAppStatus('listening');
         },
 
         onAudioData: (audioData) => {
-          // Process audio for playback
           processAndQueueAudio(audioData);
         },
-        
+
         onSpeechStarted: () => {
-           // User started speaking
-           console.log("Speech started");
+          // If user starts speaking while assistant audio is playing, stop local playback immediately.
+          audioPlayerRef.current?.stop();
+          audioPlayerRef.current?.clearQueue();
+          setTranscript('');
+          setAppStatus('listening');
         },
-        
+
         onSpeechStopped: () => {
-           // User stopped speaking
-           console.log("Speech stopped");
+          console.log('Speech stopped');
         }
       };
 
@@ -369,23 +375,20 @@ export default function OmniChat() {
     if (audioProcessorRef.current?.isActive()) {
       audioProcessorRef.current.stopCapture();
     }
-    
-    // Commit remaining audio
+
+    audioPlayerRef.current?.stop();
+    audioPlayerRef.current?.clearQueue();
+    setTranscript('');
+    setAppStatus('idle');
+
     if (clientRef.current && clientRef.current.getConnectionStatus()) {
-       clientRef.current.commit();
-       // We don't disconnect immediately to allow pending audio responses to finish
-       // But based on ticket requirements: "4. 断开连接"
-       // Let's give it a short delay or just disconnect if the user wants to "Stop"
-       
-       // For a true "Stop" button in a UI, it usually means "I want to stop everything".
-       // So we will disconnect.
-       setTimeout(() => {
-         clientRef.current?.disconnect();
-         audioPlayerRef.current?.stop();
-         audioPlayerRef.current?.clearQueue();
-       }, 500);
-    } else {
+      // VAD 模式下无需 commit，直接结束会话并断开连接
+      clientRef.current.finish();
+      setTimeout(() => {
         clientRef.current?.disconnect();
+      }, 200);
+    } else {
+      clientRef.current?.disconnect();
     }
   };
 
