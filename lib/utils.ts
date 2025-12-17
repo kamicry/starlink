@@ -1,128 +1,92 @@
-import { APP_CONFIG } from './constants';
+import { APP_CONFIG, getEnvironmentConfig } from './constants';
 
-// Utility functions for audio processing and WebSocket communication
+// Base64转换工具函数
+export function base64ToBytes(base64: string): Uint8Array {
+  const binaryString = atob(base64);
+  const bytes = new Uint8Array(binaryString.length);
+  for (let i = 0; i < binaryString.length; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return bytes;
+}
 
-/**
- * Convert ArrayBuffer to base64 string
- */
-export const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
+export function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let i = 0; i < bytes.byteLength; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  return btoa(binary);
+}
+
+export function arrayBufferToBase64(buffer: ArrayBuffer): string {
   const bytes = new Uint8Array(buffer);
   let binary = '';
   for (let i = 0; i < bytes.byteLength; i++) {
     binary += String.fromCharCode(bytes[i]);
   }
   return btoa(binary);
-};
+}
 
-/**
- * Convert base64 string to ArrayBuffer
- */
-export const base64ToArrayBuffer = (base64: string): ArrayBuffer => {
+export function base64ToArrayBuffer(base64: string): ArrayBuffer {
   const binaryString = atob(base64);
   const bytes = new Uint8Array(binaryString.length);
   for (let i = 0; i < binaryString.length; i++) {
     bytes[i] = binaryString.charCodeAt(i);
   }
   return bytes.buffer;
-};
+}
 
-/**
- * Convert Float32Array to Int16Array (PCM16)
- */
-export const float32ToInt16 = (float32Array: Float32Array): Int16Array => {
+// 音频处理工具函数
+export function createAudioContext(): AudioContext {
+  return new (window.AudioContext || (window as any).webkitAudioContext)();
+}
+
+export function float32ToInt16(float32Array: Float32Array): Int16Array {
   const int16Array = new Int16Array(float32Array.length);
   for (let i = 0; i < float32Array.length; i++) {
     const s = Math.max(-1, Math.min(1, float32Array[i]));
     int16Array[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
   }
   return int16Array;
-};
+}
 
-/**
- * Convert Int16Array to Float32Array
- */
-export const int16ToFloat32 = (int16Array: Int16Array): Float32Array => {
+export function int16ToFloat32(int16Array: Int16Array): Float32Array {
   const float32Array = new Float32Array(int16Array.length);
   for (let i = 0; i < int16Array.length; i++) {
-    float32Array[i] = int16Array[i] / 0x7FFF;
+    float32Array[i] = int16Array[i] / 0x8000;
   }
   return float32Array;
-};
+}
 
-/**
- * Calculate audio level (RMS)
- */
-export const calculateAudioLevel = (audioData: Float32Array): number => {
+export function calculateAudioLevel(audioData: Float32Array): number {
   let sum = 0;
   for (let i = 0; i < audioData.length; i++) {
     sum += audioData[i] * audioData[i];
   }
   const rms = Math.sqrt(sum / audioData.length);
-  return Math.min(100, (rms * 100));
-};
+  return Math.min(100, Math.max(0, rms * 100));
+}
 
-/**
- * Create audio context
- */
-export const createAudioContext = (): AudioContext => {
-  return new (window.AudioContext || (window as any).webkitAudioContext)();
-};
-
-/**
- * Check if browser supports required features
- */
-export const checkBrowserSupport = (): { webAudio: boolean; websocket: boolean } => {
-  return {
-    webAudio: !!(window.AudioContext || (window as any).webkitAudioContext),
-    websocket: !!window.WebSocket
-  };
-};
-
-/**
- * Format audio data for WebSocket transmission
- */
-export const formatAudioForTransmission = (audioData: Float32Array, sampleRate: number = APP_CONFIG.AUDIO.SAMPLE_RATE): any => {
-  return {
-    audio: {
-      sample_rate: sampleRate,
-      sample_bits: APP_CONFIG.AUDIO.BIT_DEPTH,
-      channel: APP_CONFIG.AUDIO.CHANNELS,
-      audio_data: arrayBufferToBase64(audioData.buffer as ArrayBuffer)
-    }
-  };
-};
-
-/**
- * Parse received audio data
- */
-export const parseReceivedAudio = (data: any): Float32Array => {
-  try {
-    const audioData = base64ToArrayBuffer(data.audio_data);
-    return new Float32Array(audioData);
-  } catch (error) {
-    console.error('Error parsing received audio:', error);
-    return new Float32Array();
-  }
-};
-
-/**
- * Error handling utility
- */
-export const handleWebSocketError = (error: any, context: string): void => {
-  console.error(`WebSocket error in ${context}:`, error);
-  // Here you could add error reporting, retry logic, or user notifications
-};
-
-/**
- * Generate unique request ID
- */
-export const generateRequestId = (): string => {
+// 生成唯一请求ID
+export function generateRequestId(): string {
   return `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-};
+}
 
-/**
- * Sleep utility for delays
- */
-export const sleep = (ms: number): Promise<void> => {
-  return new Promise(resolve => setTimeout(resolve, ms));
-};
+// WebSocket错误处理
+export function handleWebSocketError(error: any, context: string): void {
+  console.error(`WebSocket error in ${context}:`, error);
+  
+  if (error.code === 1006) {
+    console.error('Connection closed abnormally. Possible reasons:');
+    console.error('- Invalid API key');
+    console.error('- Network connectivity issues');
+    console.error('- Server maintenance');
+  } else if (error.code === 1002) {
+    console.error('Protocol error. Check WebSocket URL and protocol compatibility.');
+  } else if (error.code === 1011) {
+    console.error('Internal server error. The server encountered an unexpected condition.');
+  }
+}
+
+// 获取环境配置
+export { APP_CONFIG, getEnvironmentConfig };
