@@ -125,7 +125,17 @@ export class AudioPlayer {
    * Start playback
    */
   async play(startTime: number = 0): Promise<void> {
-    if (!this.audioContext || !this.currentAudioBuffer) {
+    if (!this.audioContext) {
+      throw new Error('Audio player not initialized');
+    }
+
+    // If no buffer loaded but queue has items, load from queue
+    if (!this.currentAudioBuffer && this.queue.length > 0) {
+      const nextBuffer = this.queue.shift()!;
+      await this.loadFromAudioBuffer(nextBuffer);
+    }
+
+    if (!this.currentAudioBuffer) {
       throw new Error('No audio data loaded or player not initialized');
     }
 
@@ -283,6 +293,8 @@ export class AudioPlayer {
         console.error('Error playing next in queue:', error);
         this.playNextInQueue(); // Try next item
       });
+    } else {
+      this.currentAudioBuffer = null;
     }
   }
 
