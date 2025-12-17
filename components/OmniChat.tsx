@@ -281,26 +281,42 @@ export default function OmniChat() {
           console.log('✓ Connected to Qwen-Omni');
           setConnectionStatus('connected');
           
-          // 2.1 Update Session immediately after connection
+          // 2.1 Update Session immediately after connection with full VAD configuration
           clientRef.current?.updateSession({
+            modalities: ['text', 'audio'],
             voice: voice,
-            instructions: '你是一个友好的 AI 助手，请自然地进行对话。'
+            instructions: '你是一个友好的 AI 助手，请自然地进行对话。',
+            turnDetection: {
+              type: 'server_vad',
+              threshold: 0.1,              // VAD 灵敏度（0-1，越低越灵敏）
+              prefix_padding_ms: 500,      // 前导填充（毫秒）
+              silence_duration_ms: 900     // 停顿检测（毫秒）
+            },
+            smoothOutput: true,
+            temperature: 0.9,
+            topP: 1.0,
+            topK: 50,
+            maxTokens: 16384,
+            repetitionPenalty: 1.05,
+            presencePenalty: 0.0
           });
         },
         
         onSessionCreated: (session) => {
           console.log(`✓ Session created: ${session.id}`);
-          // 3. Start Capture after session is ready
-          audioProcessorRef.current?.startCapture().then(() => {
-            setAppStatus('listening');
-          }).catch(err => {
-            setErrorMsg(`Failed to start mic: ${err}`);
-            setConnectionStatus('error');
-          });
         },
 
         onSessionUpdated: (session) => {
-          console.log('✓ Session updated');
+          console.log('✓ Session updated, VAD mode enabled');
+          // 3. Start audio capture after session configuration is confirmed
+          audioProcessorRef.current?.startCapture().then(() => {
+            console.log('✓ Audio capture started, ready for VAD');
+            setAppStatus('listening');
+          }).catch(err => {
+            console.error('Failed to start audio capture:', err);
+            setErrorMsg(`无法启动麦克风: ${err}`);
+            setConnectionStatus('error');
+          });
         },
         
         onClose: () => {
@@ -327,11 +343,13 @@ export default function OmniChat() {
         onSpeechStarted: (audioStartMs) => {
           console.log(`✓ 检测到语音开始 (${audioStartMs}ms)`);
           setAppStatus('listening');
+          setTranscript('🎤 正在听...');
         },
         
         onSpeechStopped: (audioEndMs) => {
           console.log(`✓ 检测到语音结束 (${audioEndMs}ms)`);
           setAppStatus('processing');
+          setTranscript('🤔 处理中...');
         },
         
         onAudioBufferCommitted: (itemId) => {
@@ -345,6 +363,7 @@ export default function OmniChat() {
         // ========== 转录事件 ==========
         onUserTranscript: (transcript) => {
           console.log(`👤 用户: ${transcript}`);
+          setTranscript('');
           setConversationHistory(prev => [...prev, { role: 'user', text: transcript }]);
         },
         
@@ -357,11 +376,13 @@ export default function OmniChat() {
         onResponseCreated: (response) => {
           console.log(`→ 开始生成回复 (ID: ${response.id})`);
           setAppStatus('processing');
+          setTranscript('💭 AI 正在思考...');
         },
         
         onResponseDone: (response) => {
           console.log(`✓ 回复完成 (状态: ${response.status})`);
-          setAppStatus('idle');
+          setAppStatus('listening');  // 回到listening状态，准备下一轮对话
+          setTranscript('');
         },
         
         // ========== 文本输出事件 ==========
@@ -388,8 +409,11 @@ export default function OmniChat() {
 
         onAudioTranscriptDelta: (delta) => {
           console.log(`🤖 助手: ${delta}`, '');
-          setTranscript(prev => prev + delta);
-          setAppStatus('processing');
+          setTranscript(prev => {
+            const currentText = prev.startsWith('💭') ? '' : prev;
+            return currentText + delta;
+          });
+          setAppStatus('speaking');
         },
         
         onAudioTranscriptDone: (transcript) => {
@@ -674,19 +698,29 @@ export default function OmniChat() {
                    </button>
                  )}
 
-                 {/* Status Detail */}
+                 {/* Status Detail with VAD Mode Indicator */}
                  {isConnected && (
-                    <div className="text-center py-2 bg-white rounded-lg border border-gray-100">
-                      <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">状态</div>
-                      <div className="font-medium text-blue-600 capitalize flex items-center justify-center gap-2">
-                        {appStatus === 'listening' && <span className="relative flex h-3 w-3"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span><span className="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span></span>}
-                        {appStatus === 'speaking' && <Play size={14} className="animate-pulse" />}
-                        {appStatus === 'processing' && <Loader2 size={14} className="animate-spin" />}
-                        {appStatus === 'idle' && <span className="w-3 h-3 rounded-full bg-gray-400"></span>}
-                        {appStatus === 'listening' && '监听中'}
-                        {appStatus === 'speaking' && '播放中'}
-                        {appStatus === 'processing' && '处理中'}
-                        {appStatus === 'idle' && '空闲'}
+                    <div className="space-y-2">
+                      <div className="text-center py-2 bg-white rounded-lg border border-gray-100">
+                        <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">状态</div>
+                        <div className="font-medium text-blue-600 capitalize flex items-center justify-center gap-2">
+                          {appStatus === 'listening' && <span className="relative flex h-3 w-3"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span><span className="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span></span>}
+                          {appStatus === 'speaking' && <Play size={14} className="animate-pulse" />}
+                          {appStatus === 'processing' && <Loader2 size={14} className="animate-spin" />}
+                          {appStatus === 'idle' && <span className="w-3 h-3 rounded-full bg-gray-400"></span>}
+                          {appStatus === 'listening' && '监听中'}
+                          {appStatus === 'speaking' && '播放中'}
+                          {appStatus === 'processing' && '处理中'}
+                          {appStatus === 'idle' && '空闲'}
+                        </div>
+                      </div>
+
+                      {/* VAD Mode Badge */}
+                      <div className="text-center py-1.5 bg-gradient-to-r from-purple-50 to-blue-50 rounded-lg border border-purple-200">
+                        <div className="text-xs font-semibold text-purple-700 flex items-center justify-center gap-1">
+                          <Activity size={12} />
+                          <span>VAD 模式 (自动检测)</span>
+                        </div>
                       </div>
                     </div>
                  )}
