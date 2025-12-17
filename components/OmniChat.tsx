@@ -106,7 +106,7 @@ export default function OmniChat() {
           onAudioChunk: (buffer) => {
             // Forward audio chunk to WebSocket
             if (clientRef.current && clientRef.current.getConnectionStatus()) {
-              clientRef.current.appendAudio(buffer);
+              clientRef.current.streamAudio(buffer);
             }
           },
           onAudioLevel: (level) => {
@@ -134,7 +134,7 @@ export default function OmniChat() {
       pcmDecoderRef.current?.dispose();
       audioPlayerRef.current?.dispose();
       audioProcessorRef.current?.dispose();
-      clientRef.current?.disconnect();
+      clientRef.current?.close();
     };
   }, []);
 
@@ -278,7 +278,7 @@ export default function OmniChat() {
       // 2. Setup Client
       const callbacks: QwenOmniCallbacks = {
         onOpen: () => {
-          console.log('Connected to Qwen-Omni');
+          console.log('✓ Connected to Qwen-Omni');
           setConnectionStatus('connected');
           
           // 2.1 Update Session immediately after connection
@@ -286,12 +286,12 @@ export default function OmniChat() {
             voice: voice,
             input_audio_format: 'pcm16',
             output_audio_format: 'pcm24',
-            instructions: 'You are a helpful AI assistant.'
+            instructions: '你是一个友好的 AI 助手，请自然地进行对话。'
           });
         },
         
-        onSessionCreated: (sessionId) => {
-          console.log('Session created:', sessionId);
+        onSessionCreated: (session) => {
+          console.log(`✓ Session created: ${session.id}`);
           // 3. Start Capture after session is ready
           audioProcessorRef.current?.startCapture().then(() => {
             setAppStatus('listening');
@@ -301,51 +301,131 @@ export default function OmniChat() {
           });
         },
 
-        onSessionUpdated: () => {
-           console.log('Session updated');
+        onSessionUpdated: (session) => {
+          console.log('✓ Session updated');
         },
         
         onClose: () => {
-          console.log('Disconnected');
+          console.log('→ Disconnected');
           setConnectionStatus('disconnected');
           setAppStatus('idle');
           setAudioLevel(0);
         },
         
-        onError: (error, type) => {
-          console.error(`Error (${type}):`, error);
-          setErrorMsg(`${type || 'Error'}: ${error}`);
-          // Don't necessarily disconnect on all errors, but for connection error we might
-          if (type === 'WebSocket connection error' || type === 'reconnection') {
-             setConnectionStatus('error');
-             setAppStatus('idle');
+        // ========== 错误处理 ==========
+        onError: (error) => {
+          console.error(`❌ Error [${error.code}]:`, error.message);
+          if (error.param) {
+            console.error(`   参数: ${error.param}`);
+          }
+          setErrorMsg(error.message);
+          if (error.code === 1006 || error.code === 1002) {
+            setConnectionStatus('error');
+            setAppStatus('idle');
           }
         },
         
+        // ========== 用户输入事件 ==========
+        onSpeechStarted: (audioStartMs) => {
+          console.log(`✓ 检测到语音开始 (${audioStartMs}ms)`);
+          setAppStatus('listening');
+        },
+        
+        onSpeechStopped: (audioEndMs) => {
+          console.log(`✓ 检测到语音结束 (${audioEndMs}ms)`);
+          setAppStatus('processing');
+        },
+        
+        onAudioBufferCommitted: (itemId) => {
+          console.log(`✓ 音频缓冲区已提交, 项目ID: ${itemId}`);
+        },
+        
+        onAudioBufferCleared: () => {
+          console.log(`✓ 音频缓冲区已清除`);
+        },
+
+        // ========== 转录事件 ==========
+        onUserTranscript: (transcript) => {
+          console.log(`👤 用户: ${transcript}`);
+          setConversationHistory(prev => [...prev, { role: 'user', text: transcript }]);
+        },
+        
+        onTranscriptionError: (error) => {
+          console.error(`❌ 转录失败 [${error.code}]: ${error.message}`);
+          setErrorMsg(`转录失败: ${error.message}`);
+        },
+
+        // ========== 响应事件 ==========
+        onResponseCreated: (response) => {
+          console.log(`→ 开始生成回复 (ID: ${response.id})`);
+          setAppStatus('processing');
+        },
+        
+        onResponseDone: (response) => {
+          console.log(`✓ 回复完成 (状态: ${response.status})`);
+          setAppStatus('idle');
+        },
+        
+        // ========== 文本输出事件 ==========
+        onTextDelta: (delta) => {
+          setTranscript(prev => prev + delta);
+        },
+        
+        onTextDone: (text) => {
+          console.log(`✓ 文本完成: "${text}"`);
+          setTranscript('');
+          setConversationHistory(prev => [...prev, { role: 'assistant', text }]);
+        },
+        
+        // ========== 音频输出事件 ==========
+        onAudioDelta: (audioBytes) => {
+          // Process audio for playback
+          const audioBuffer = audioBytes.buffer as ArrayBuffer;
+          processAndQueueAudio(audioBuffer);
+        },
+        
+        onAudioDone: () => {
+          console.log(`✓ 音频生成完成`);
+        },
+
         onAudioTranscriptDelta: (delta) => {
+          console.log(`🤖 助手: ${delta}`, '');
           setTranscript(prev => prev + delta);
           setAppStatus('processing');
         },
         
-        onAudioTranscriptDone: (text) => {
-           // Move current transcript to history
-           setTranscript('');
-           setConversationHistory(prev => [...prev, { role: 'assistant', text }]);
+        onAudioTranscriptDone: (transcript) => {
+          console.log(`✓ 音频转录: "${transcript}"`);
+          setTranscript('');
+          setConversationHistory(prev => [...prev, { role: 'assistant', text: transcript }]);
         },
 
-        onAudioData: (audioData) => {
-          // Process audio for playback
-          processAndQueueAudio(audioData);
+        // ========== 对话项目事件 ==========
+        onConversationItemCreated: (item) => {
+          console.log(`✓ 对话项已创建: ${item.id} (角色: ${item.role}, 状态: ${item.status})`);
+        },
+
+        // ========== 输出项目事件 ==========
+        onOutputItemAdded: (item) => {
+          console.log(`→ 输出项目已添加 (ID: ${item.id}, 角色: ${item.role})`);
         },
         
-        onSpeechStarted: () => {
-           // User started speaking
-           console.log("Speech started");
+        onOutputItemDone: (item) => {
+          console.log(`✓ 输出项目完成 (ID: ${item.id})`);
+        },
+
+        // ========== 内容部分事件 ==========
+        onContentPartAdded: (part) => {
+          console.log(`→ 内容部分已添加 (类型: ${part.type})`);
         },
         
-        onSpeechStopped: () => {
-           // User stopped speaking
-           console.log("Speech stopped");
+        onContentPartDone: (part) => {
+          console.log(`✓ 内容部分完成 (类型: ${part.type})`);
+          if (part.type === 'audio') {
+            console.log(`  音频转录: "${part.text || ''}"`);
+          } else if (part.type === 'text') {
+            console.log(`  文本: "${part.text || ''}"`);
+          }
         }
       };
 
@@ -370,22 +450,18 @@ export default function OmniChat() {
       audioProcessorRef.current.stopCapture();
     }
     
-    // Commit remaining audio
+    // Commit remaining audio and disconnect
     if (clientRef.current && clientRef.current.getConnectionStatus()) {
-       clientRef.current.commit();
-       // We don't disconnect immediately to allow pending audio responses to finish
-       // But based on ticket requirements: "4. 断开连接"
-       // Let's give it a short delay or just disconnect if the user wants to "Stop"
+       clientRef.current.commitAudioBuffer();
        
-       // For a true "Stop" button in a UI, it usually means "I want to stop everything".
-       // So we will disconnect.
+       // For a "Stop" button, disconnect everything
        setTimeout(() => {
-         clientRef.current?.disconnect();
+         clientRef.current?.close();
          audioPlayerRef.current?.stop();
          audioPlayerRef.current?.clearQueue();
        }, 500);
     } else {
-        clientRef.current?.disconnect();
+        clientRef.current?.close();
     }
   };
 
