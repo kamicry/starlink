@@ -246,7 +246,8 @@ export class QwenOmniClient {
         }
 
         // 如果没有提供URL，使用默认URL（API Key通过query参数传递）
-        const wsUrl = url || `wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3-omni-flash-realtime&authorization=Bearer ${key}`;
+        const { qwenModel } = getEnvironmentConfig();
+        const wsUrl = url || `wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=${qwenModel}&authorization=Bearer ${key}`;
         this.ws = new WebSocket(wsUrl);
         
         this.ws.onopen = () => {

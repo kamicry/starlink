@@ -59,6 +59,9 @@
 # 从阿里云百炼平台获取的 API Key
 DASHSCOPE_API_KEY=your_actual_api_key_here
 NEXT_PUBLIC_DASHSCOPE_API_KEY=your_actual_api_key_here
+
+# 可选：指定模型（默认 qwen3-omni-flash-realtime）
+NEXT_PUBLIC_QWEN_MODEL=qwen3-omni-flash-realtime
 ```
 
 ### 2. 基本使用

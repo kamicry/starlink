@@ -27,6 +27,11 @@ export const APP_CONFIG = {
     WEBSOCKET: '/api/ws'
   },
   
+  // Model configuration
+  MODEL: {
+    DEFAULT: 'qwen3-omni-flash-realtime'
+  },
+  
   // UI configuration
   UI: {
     MAX_AUDIO_LEVEL: 100,
@@ -41,6 +46,7 @@ export const getEnvironmentConfig = () => {
   return {
     isDevelopment,
     apiKey: process.env.DASHSCOPE_API_KEY,
+    qwenModel: process.env.NEXT_PUBLIC_QWEN_MODEL || APP_CONFIG.MODEL.DEFAULT,
     wsUrl: isDevelopment 
       ? 'ws://localhost:8080' 
       : APP_CONFIG.WEBSOCKET_URL

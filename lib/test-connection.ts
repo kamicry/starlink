@@ -1,6 +1,7 @@
 /**
  * Qwen API 连接测试工具
  */
+import { getEnvironmentConfig } from './constants';
 
 export interface ConnectionTestResult {
   success: boolean;
@@ -26,9 +27,11 @@ export async function testQwenConnection(apiKey: string): Promise<ConnectionTest
   try {
     console.log('🔄 正在测试 API 连接...');
     
+    const { qwenModel } = getEnvironmentConfig();
+    
     // 创建 WebSocket 连接
     const ws = new WebSocket(
-      'wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3-omni-flash-realtime'
+      `wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=${qwenModel}&authorization=Bearer ${apiKey}`
     );
 
     return new Promise((resolve) => {
