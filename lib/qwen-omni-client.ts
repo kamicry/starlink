@@ -32,30 +32,6 @@ export interface QwenOmniResponse {
   event_id?: string;
   session?: {
     id: string;
-    model?: string;
-    voice?: string;
-    instructions?: string;
-    temperature?: number;
-    max_tokens?: number;
-    turn_detection?: {
-      threshold?: number;
-      type?: string;
-    };
-  };
-  error?: {
-    code?: number;
-    message: string;
-    type?: string;
-    param?: string;
-  };
-  audio_start_ms?: number;
-  audio_end_ms?: number;
-  item_id?: string;
-  item?: {
-    id: string;
-    role: 'user' | 'assistant';
-    status: string;
-    content?: any[];
   };
   response?: {
     id?: string;
@@ -66,7 +42,6 @@ export interface QwenOmniResponse {
   };
   audio?: {
     delta?: string;
-    done?: boolean;
   };
   delta?: string;
   text?: string;
@@ -107,8 +82,8 @@ export interface QwenOmniConnectOptions {
 }
 
 export class QwenOmniClient {
-  // WebSocket connection
   private ws: WebSocket | null = null;
+  private callbacks: QwenOmniCallbacks;
   private apiKey: string;
 
   private isConnected = false;
@@ -172,7 +147,7 @@ export class QwenOmniClient {
             this.handleMessage(response);
           } catch (error) {
             console.error('Error parsing WebSocket message:', error);
-            this.callbacks.onError?.({ message: 'Error parsing message' });
+            this.callbacks.onError?.('Error parsing message');
           }
         };
 
@@ -190,8 +165,8 @@ export class QwenOmniClient {
         };
 
         this.ws.onerror = (error) => {
-          console.error('❌ Qwen-Omni WebSocket error:', error);
-          this.callbacks.onError?.({ message: 'WebSocket connection error' });
+          console.error('Qwen-Omni WebSocket error:', error);
+          this.callbacks.onError?.('WebSocket connection error');
           reject(error);
         };
       } catch (error) {
@@ -250,64 +225,35 @@ export class QwenOmniClient {
         turn_detection: config.turn_detection ?? null
       }
     };
-    
-    await this.sendEvent(event);
-    
-    console.log('✓ 会话配置已发送：');
-    console.log('  - 音色: ' + event.session.voice);
-    console.log('  - 指令: ' + event.session.instructions);
-    console.log('  - 温度: ' + event.session.temperature);
-    console.log('  - VAD 阈值: ' + event.session.turn_detection?.threshold);
+
+    this.sendMessage(message);
   }
 
   appendAudio(audioData: ArrayBuffer): void {
     if (!this.isConnected) {
       return;
     }
-    
-    const event = {
-      "type": "response.cancel"
+
+    const message: QwenOmniMessage = {
+      event_id: generateRequestId(),
+      type: 'input_audio_buffer.append',
+      audio: this.arrayBufferToBase64(audioData)
     };
-    
-    await this.sendEvent(event);
-    console.log('⊗ 已取消响应');
-    
-    this._isResponding = false;
-    this._currentResponseId = null;
+
+    this.sendMessage(message);
   }
 
   commit(): void {
     if (!this.isConnected) {
       return;
     }
-    return btoa(binary);
-  }
 
-  /**
-   * 提交音频缓冲区
-   * 用途：（仅 Manual 模式）手动提交缓冲区以触发处理
-   * VAD 模式：无需调用，服务端自动提交
-   */
-  async commitAudioBuffer(): Promise<void> {
-    const event = {
-      "type": "input_audio_buffer.commit"
+    const message: QwenOmniMessage = {
+      event_id: generateRequestId(),
+      type: 'input_audio_buffer.commit'
     };
-    
-    await this.sendEvent(event);
-    console.log('✓ 音频缓冲区已提交');
-  }
 
-  /**
-   * 清除音频缓冲区
-   * 用途：清除当前缓冲区中的音频数据
-   */
-  async clearAudioBuffer(): Promise<void> {
-    const event = {
-      "type": "input_audio_buffer.clear"
-    };
-    
-    await this.sendEvent(event);
-    console.log('✓ 音频缓冲区已清除');
+    this.sendMessage(message);
   }
 
   cancelResponse(): void {
@@ -328,46 +274,12 @@ export class QwenOmniClient {
       return;
     }
 
-  /**
-   * 追加图像数据（可选）
-   * 用途：（暂不使用）发送视频帧到服务端
-   */
-  async appendImage(imageData: ArrayBuffer): Promise<void> {
-    // 将 ArrayBuffer 转换为 Base64
-    const imageBase64 = this.arrayBufferToBase64(imageData);
-    
-    const event = {
-      "type": "input_image_buffer.append",
-      "image": imageBase64  // Base64 编码的 JPG/JPEG 数据
+    const message: QwenOmniMessage = {
+      event_id: generateRequestId(),
+      type: 'session.finish'
     };
-    
-    await this.sendEvent(event);
-    console.log('▶ 发送图像帧 (' + imageData.byteLength + ' 字节)');
-  }
 
-  // ========== Event Management ==========
-
-  /**
-   * 生成唯一事件ID
-   */
-  private generateEventId(): string {
-    return `event_${Date.now()}_${++this.eventCounter}`;
-  }
-
-  /**
-   * 发送事件到服务端
-   * 检查WebSocket连接状态并添加事件ID
-   */
-  private async sendEvent(event: any): Promise<void> {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      throw new Error('WebSocket 未连接');
-    }
-    
-    // 生成事件 ID
-    event.event_id = this.generateEventId();
-    
-    console.log(`📤 发送事件: ${event.type}`, event);
-    this.ws.send(JSON.stringify(event));
+    this.sendMessage(message);
   }
 
   addEventListener(event: keyof QwenOmniCallbacks, callback: Function): void {
@@ -497,8 +409,6 @@ export class QwenOmniClient {
   private sendMessage(message: QwenOmniMessage): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(message));
-    } else {
-      console.warn('⚠️ WebSocket not open, cannot send message');
     }
   }
 
