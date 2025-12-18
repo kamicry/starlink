@@ -249,8 +249,10 @@ export class QwenOmniClient {
         }
 
         // 如果没有提供URL，使用默认URL（API Key通过 query 参数传递）
-        const model = process.env.NEXT_PUBLIC_QWEN_MODEL || 'qwen3-omni-flash-realtime';
-        const auth = encodeURIComponent(`Bearer ${key}`);
+        // 注意：model 来自 .env 时可能包含空格/换行（例如 CRLF），这里做 trim 防御
+        const defaultModel = 'qwen3-omni-flash-realtime';
+        const model = (process.env.NEXT_PUBLIC_QWEN_MODEL || '').trim() || defaultModel;
+        const auth = encodeURIComponent(`Bearer ${String(key).trim()}`);
         const wsUrl =
           url ||
           `wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=${encodeURIComponent(model)}&authorization=${auth}`;
