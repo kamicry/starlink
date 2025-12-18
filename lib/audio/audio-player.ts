@@ -13,12 +13,20 @@ export interface AudioPlayerOptions {
 
 export class AudioPlayer {
   private audioContext: AudioContext | null = null;
-  private currentSource: AudioBufferSourceNode | null = null;
   private gainNode: GainNode | null = null;
-  private options: AudioPlayerOptions;
+
+  private options: Required<AudioPlayerOptions>;
+
   private isPlaying: boolean = false;
+  private isStreaming: boolean = false;
+
+  private currentSource: AudioBufferSourceNode | null = null;
   private currentAudioBuffer: AudioBuffer | null = null;
+
   private queue: AudioBuffer[] = [];
+  private scheduledSources: Set<AudioBufferSourceNode> = new Set();
+  private nextStartTime: number = 0;
+
   private playbackStartTime: number = 0;
   private pauseOffset: number = 0;
 
@@ -26,41 +34,34 @@ export class AudioPlayer {
     this.options = {
       sampleRate: options.sampleRate || APP_CONFIG.AUDIO.SAMPLE_RATE,
       channels: options.channels || APP_CONFIG.AUDIO.CHANNELS,
-      volume: options.volume || 1.0,
-      onPlay: options.onPlay,
-      onPause: options.onPause,
-      onEnded: options.onEnded,
-      onError: options.onError,
-      autoPlay: options.autoPlay || false
+      volume: options.volume ?? 1.0,
+      onPlay: options.onPlay || (() => {}),
+      onPause: options.onPause || (() => {}),
+      onEnded: options.onEnded || (() => {}),
+      onError: options.onError || (() => {}),
+      autoPlay: options.autoPlay ?? false
     };
   }
 
-  /**
-   * Initialize audio context
-   */
   async initialize(): Promise<void> {
     try {
       this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
         sampleRate: this.options.sampleRate
       });
 
-      // Create gain node for volume control
       this.gainNode = this.audioContext.createGain();
       this.gainNode.connect(this.audioContext.destination);
-      this.setVolume(this.options.volume || 1.0);
+      this.setVolume(this.options.volume);
 
       console.log('Audio player initialized');
     } catch (error) {
       const errorMessage = `Failed to initialize audio player: ${error}`;
       console.error(errorMessage);
-      this.options.onError?.(errorMessage);
+      this.options.onError(errorMessage);
       throw error;
     }
   }
 
-  /**
-   * Load audio data from Float32Array
-   */
   async loadFromFloat32Array(audioData: Float32Array): Promise<void> {
     if (!this.audioContext) {
       throw new Error('Audio player not initialized');
@@ -68,39 +69,34 @@ export class AudioPlayer {
 
     try {
       const audioBuffer = this.audioContext.createBuffer(
-        this.options.channels || APP_CONFIG.AUDIO.CHANNELS,
+        this.options.channels,
         audioData.length,
-        this.options.sampleRate || APP_CONFIG.AUDIO.SAMPLE_RATE
+        this.options.sampleRate
       );
 
-      // Create properly typed Float32Array for copyToChannel
       const channelData = new Float32Array(audioData);
-      
-      if ((this.options.channels || APP_CONFIG.AUDIO.CHANNELS) === 1) {
+
+      if (this.options.channels === 1) {
         audioBuffer.copyToChannel(channelData, 0);
       } else {
-        // For multi-channel, assume mono data needs to be duplicated
-        for (let channel = 0; channel < (this.options.channels || APP_CONFIG.AUDIO.CHANNELS); channel++) {
+        for (let channel = 0; channel < this.options.channels; channel++) {
           audioBuffer.copyToChannel(channelData, channel);
         }
       }
 
       this.currentAudioBuffer = audioBuffer;
-      
+
       if (this.options.autoPlay) {
         await this.play();
       }
     } catch (error) {
       const errorMessage = `Failed to load audio data: ${error}`;
       console.error(errorMessage);
-      this.options.onError?.(errorMessage);
+      this.options.onError(errorMessage);
       throw error;
     }
   }
 
-  /**
-   * Load audio data from ArrayBuffer (WAV or raw PCM)
-   */
   async loadFromArrayBuffer(arrayBuffer: ArrayBuffer): Promise<void> {
     if (!this.audioContext) {
       throw new Error('Audio player not initialized');
@@ -109,137 +105,157 @@ export class AudioPlayer {
     try {
       const audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer.slice(0));
       this.currentAudioBuffer = audioBuffer;
-      
+
       if (this.options.autoPlay) {
         await this.play();
       }
     } catch (error) {
       const errorMessage = `Failed to decode audio data: ${error}`;
       console.error(errorMessage);
-      this.options.onError?.(errorMessage);
+      this.options.onError(errorMessage);
       throw error;
     }
   }
 
-  /**
-   * Start playback
-   */
   async play(startTime: number = 0): Promise<void> {
     if (!this.audioContext) {
       throw new Error('Audio player not initialized');
     }
 
-    // If no buffer loaded but queue has items, load from queue
-    if (!this.currentAudioBuffer && this.queue.length > 0) {
-      const nextBuffer = this.queue.shift()!;
-      await this.loadFromAudioBuffer(nextBuffer);
-    }
-
-    if (!this.currentAudioBuffer) {
-      throw new Error('No audio data loaded or player not initialized');
-    }
-
     try {
-      // Resume audio context if suspended
       if (this.audioContext.state === 'suspended') {
         await this.audioContext.resume();
       }
 
-      // Stop current playback if playing
+      const wasPlaying = this.isPlaying;
+
+      if (this.queue.length > 0 || this.scheduledSources.size > 0) {
+        this.isStreaming = true;
+        this.isPlaying = true;
+        this.scheduleQueuedBuffers();
+
+        if (!wasPlaying) {
+          this.options.onPlay();
+        }
+
+        return;
+      }
+
+      if (!this.currentAudioBuffer) {
+        throw new Error('No audio data loaded or queued');
+      }
+
+      this.isStreaming = false;
+
       this.stop();
 
-      // Create new source
       this.currentSource = this.audioContext.createBufferSource();
       this.currentSource.buffer = this.currentAudioBuffer;
       this.currentSource.connect(this.gainNode!);
 
-      // Set up event handlers
       this.currentSource.onended = () => {
         this.isPlaying = false;
-        this.options.onEnded?.();
-        this.playNextInQueue();
+        this.currentSource = null;
+        this.currentAudioBuffer = null;
+        this.pauseOffset = 0;
+        this.playbackStartTime = 0;
+        this.options.onEnded();
       };
 
-      // Start playback
       const offset = this.pauseOffset + startTime;
       this.currentSource.start(0, offset);
       this.playbackStartTime = this.audioContext.currentTime - offset;
       this.isPlaying = true;
       this.pauseOffset = 0;
 
-      this.options.onPlay?.();
+      if (!wasPlaying) {
+        this.options.onPlay();
+      }
     } catch (error) {
       const errorMessage = `Failed to start playback: ${error}`;
       console.error(errorMessage);
-      this.options.onError?.(errorMessage);
+      this.options.onError(errorMessage);
       throw error;
     }
   }
 
-  /**
-   * Pause playback
-   */
   pause(): void {
-    if (!this.isPlaying || !this.audioContext) {
+    if (!this.audioContext || !this.isPlaying) {
       return;
     }
 
     try {
-      // Calculate pause offset
+      if (this.isStreaming) {
+        this.audioContext.suspend().catch(() => {});
+        this.isPlaying = false;
+        this.options.onPause();
+        return;
+      }
+
       this.pauseOffset = this.audioContext.currentTime - this.playbackStartTime;
 
-      // Stop current source
       if (this.currentSource) {
         this.currentSource.stop();
         this.currentSource = null;
       }
 
       this.isPlaying = false;
-      this.options.onPause?.();
+      this.options.onPause();
     } catch (error) {
       console.error('Error pausing playback:', error);
     }
   }
 
-  /**
-   * Stop playback
-   */
   stop(): void {
     if (this.currentSource) {
-      this.currentSource.stop();
+      try {
+        this.currentSource.onended = null;
+        this.currentSource.stop();
+      } catch {
+        // ignore
+      }
       this.currentSource = null;
     }
 
+    for (const source of this.scheduledSources) {
+      try {
+        source.onended = null;
+        source.stop();
+      } catch {
+        // ignore
+      }
+    }
+
+    this.scheduledSources.clear();
     this.isPlaying = false;
+    this.isStreaming = false;
+    this.nextStartTime = 0;
     this.pauseOffset = 0;
     this.playbackStartTime = 0;
   }
 
-  /**
-   * Set playback volume (0.0 to 1.0)
-   */
   setVolume(volume: number): void {
-    if (this.gainNode) {
-      this.gainNode.gain.setValueAtTime(
-        Math.max(0, Math.min(1, volume)),
-        this.audioContext?.currentTime || 0
-      );
+    if (!this.gainNode || !this.audioContext) {
+      return;
     }
+
+    this.gainNode.gain.setValueAtTime(
+      Math.max(0, Math.min(1, volume)),
+      this.audioContext.currentTime
+    );
   }
 
-  /**
-   * Get current volume
-   */
   getVolume(): number {
-    return this.gainNode?.gain.value || this.options.volume || 1.0;
+    return this.gainNode?.gain.value ?? this.options.volume;
   }
 
-  /**
-   * Get current playback time
-   */
   getCurrentTime(): number {
     if (!this.audioContext) {
       return 0;
+    }
+
+    if (this.isStreaming) {
+      return this.audioContext.currentTime;
     }
 
     if (this.isPlaying) {
@@ -249,72 +265,74 @@ export class AudioPlayer {
     return this.pauseOffset;
   }
 
-  /**
-   * Get total duration of current audio
-   */
   getDuration(): number {
     return this.currentAudioBuffer?.duration || 0;
   }
 
-  /**
-   * Seek to specific time
-   */
   seek(time: number): void {
-    if (!this.currentAudioBuffer) {
+    if (!this.currentAudioBuffer || this.isStreaming) {
       return;
     }
 
     const clampedTime = Math.max(0, Math.min(time, this.getDuration()));
-    
+
     if (this.isPlaying) {
       this.pauseOffset = clampedTime;
-      this.play();
+      this.play().catch(() => {});
     } else {
       this.pauseOffset = clampedTime;
     }
   }
 
-  /**
-   * Add audio to playback queue
-   */
   addToQueue(audioBuffer: AudioBuffer): void {
     this.queue.push(audioBuffer);
-  }
 
-  /**
-   * Play next item in queue
-   */
-  private playNextInQueue(): void {
-    if (this.queue.length > 0) {
-      const nextBuffer = this.queue.shift()!;
-      this.loadFromAudioBuffer(nextBuffer).then(() => {
-        this.play();
-      }).catch(error => {
-        console.error('Error playing next in queue:', error);
-        this.playNextInQueue(); // Try next item
-      });
-    } else {
-      this.currentAudioBuffer = null;
+    if (this.isPlaying) {
+      this.isStreaming = true;
+      this.scheduleQueuedBuffers();
     }
   }
 
-  /**
-   * Load audio from AudioBuffer
-   */
-  private async loadFromAudioBuffer(audioBuffer: AudioBuffer): Promise<void> {
-    this.currentAudioBuffer = audioBuffer;
+  private scheduleQueuedBuffers(): void {
+    if (!this.audioContext || !this.gainNode) {
+      return;
+    }
+
+    const now = this.audioContext.currentTime;
+    const minStart = now + 0.02;
+    if (this.nextStartTime < minStart) {
+      this.nextStartTime = minStart;
+    }
+
+    while (this.queue.length > 0) {
+      const buffer = this.queue.shift()!;
+
+      const source = this.audioContext.createBufferSource();
+      source.buffer = buffer;
+      source.connect(this.gainNode);
+
+      const startAt = Math.max(this.nextStartTime, this.audioContext.currentTime + 0.02);
+      source.start(startAt);
+      this.nextStartTime = startAt + buffer.duration;
+
+      this.scheduledSources.add(source);
+      source.onended = () => {
+        this.scheduledSources.delete(source);
+
+        if (this.scheduledSources.size === 0 && this.queue.length === 0) {
+          this.isPlaying = false;
+          this.isStreaming = false;
+          this.nextStartTime = 0;
+          this.options.onEnded();
+        }
+      };
+    }
   }
 
-  /**
-   * Clear playback queue
-   */
   clearQueue(): void {
     this.queue = [];
   }
 
-  /**
-   * Get player status
-   */
   getStatus(): {
     isPlaying: boolean;
     currentTime: number;
@@ -327,13 +345,10 @@ export class AudioPlayer {
       currentTime: this.getCurrentTime(),
       duration: this.getDuration(),
       volume: this.getVolume(),
-      queueLength: this.queue.length
+      queueLength: this.queue.length + this.scheduledSources.size
     };
   }
 
-  /**
-   * Set playback rate (speed)
-   */
   setPlaybackRate(rate: number): void {
     if (this.currentSource) {
       this.currentSource.playbackRate.setValueAtTime(
@@ -343,31 +358,16 @@ export class AudioPlayer {
     }
   }
 
-  /**
-   * Enable/disable looping
-   */
   setLooping(loop: boolean): void {
     if (this.currentSource) {
       this.currentSource.loop = loop;
     }
   }
 
-  /**
-   * Apply audio effect (simple filter)
-   */
-  applyFilter(filterType: BiquadFilterType, frequency: number, Q: number = 1): void {
-    if (!this.audioContext || !this.gainNode) {
-      return;
-    }
-
-    // This is a simplified implementation
-    // In a full implementation, you'd create and configure filter nodes
+  applyFilter(_filterType: BiquadFilterType, _frequency: number, _Q: number = 1): void {
     console.warn('Audio filtering not fully implemented in this version');
   }
 
-  /**
-   * Fade in/out
-   */
   fadeIn(duration: number = 1.0): void {
     if (!this.gainNode || !this.audioContext) {
       return;
@@ -388,34 +388,27 @@ export class AudioPlayer {
     this.gainNode.gain.linearRampToValueAtTime(0, currentTime + duration);
   }
 
-  /**
-   * Create visual audio data for visualization
-   */
   createVisualizationData(): Uint8Array {
-    if (!this.audioContext || !this.currentAudioBuffer) {
+    if (!this.audioContext) {
       return new Uint8Array(0);
     }
 
-    // This is a placeholder implementation
-    // In a real application, you'd use AnalyserNode for real-time visualization
     const bufferLength = 256;
     const dataArray = new Uint8Array(bufferLength);
-    
-    // Generate simple visualization data based on current audio level
+
     const currentTime = this.getCurrentTime();
     const frequency = 2;
     const amplitude = 0.5;
-    
+
     for (let i = 0; i < bufferLength; i++) {
-      dataArray[i] = Math.floor((Math.sin(currentTime * frequency + i * 0.1) * amplitude + 0.5) * 255);
+      dataArray[i] = Math.floor(
+        (Math.sin(currentTime * frequency + i * 0.1) * amplitude + 0.5) * 255
+      );
     }
-    
+
     return dataArray;
   }
 
-  /**
-   * Clean up resources
-   */
   dispose(): void {
     this.stop();
     this.clearQueue();

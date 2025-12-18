@@ -17,6 +17,7 @@ export interface SessionConfig {
   voice?: string;                    // Cherry, Serena, etc.
   instructions?: string;             // 系统指令
   turnDetection?: TurnDetectionConfig | null; // VAD 模式配置
+  inputAudioTranscriptionModel?: string | null; // 用户语音自动转录模型（null 禁用）
   smoothOutput?: boolean | null;     // 口语化回复
   temperature?: number;              // 0-2，越高越多样
   topP?: number;                     // 0-1
@@ -208,7 +209,8 @@ export class QwenOmniClient {
   private isConnected: boolean = false;
   private reconnectAttempts: number = 0;
   private maxReconnectAttempts: number = 5;
-  private heartbeatInterval: NodeJS.Timeout | null = null;
+  private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+  private shouldReconnect: boolean = true;
   
   // Event management
   private eventCounter = 0;
@@ -239,6 +241,8 @@ export class QwenOmniClient {
   async connect(url?: string, apiKey?: string): Promise<void> {
     return new Promise((resolve, reject) => {
       try {
+        this.shouldReconnect = true;
+
         // 使用提供的API Key或构造函数中设置的API Key
         const key = apiKey || this.apiKey;
         if (!key) {
@@ -246,7 +250,8 @@ export class QwenOmniClient {
         }
 
         // 如果没有提供URL，使用默认URL（API Key通过query参数传递）
-        const wsUrl = url || `wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3-omni-flash-realtime&authorization=Bearer ${key}`;
+        const auth = encodeURIComponent(`Bearer ${key}`);
+        const wsUrl = url || `wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3-omni-flash-realtime&authorization=${auth}`;
         this.ws = new WebSocket(wsUrl);
         
         this.ws.onopen = () => {
@@ -273,7 +278,10 @@ export class QwenOmniClient {
           this.isConnected = false;
           this.stopHeartbeat();
           this.callbacks.onClose?.();
-          this.handleReconnect();
+
+          if (this.shouldReconnect) {
+            this.handleReconnect();
+          }
         };
 
         this.ws.onerror = (error) => {
@@ -419,16 +427,21 @@ export class QwenOmniClient {
         break;
 
       case 'response.text.done':
-        const completeText = response.transcript?.text!;
+        const completeText = response.transcript?.text ?? response.delta;
+        if (!completeText) {
+          break;
+        }
         console.log(`\n✓ 文本完成: "${completeText}"`);
         this.callbacks.onTextDone?.(completeText);
         break;
 
       // ========== Audio Output Events ==========
       case 'response.audio.delta':
-        const audioDelta = response.audio?.delta!;
+        const audioDelta = response.audio?.delta ?? response.delta;
+        if (!audioDelta) {
+          break;
+        }
         const audioBytes = base64ToBytes(audioDelta);
-        // 立即加入播放队列
         this.callbacks.onAudioDelta?.(audioBytes);
         break;
 
@@ -438,14 +451,20 @@ export class QwenOmniClient {
         break;
 
       case 'response.audio_transcript.delta':
-        const transcriptDelta = response.transcript?.delta!;
+        const transcriptDelta = response.transcript?.delta ?? response.delta;
+        if (!transcriptDelta) {
+          break;
+        }
         console.log(`🤖 助手: ${transcriptDelta}`, '');
         this.assistantTranscriptBuffer += transcriptDelta;
         this.callbacks.onAudioTranscriptDelta?.(transcriptDelta);
         break;
 
       case 'response.audio_transcript.done':
-        const completeTranscript = response.transcript?.text!;
+        const completeTranscript = response.transcript?.text ?? response.delta;
+        if (!completeTranscript) {
+          break;
+        }
         console.log(`\n✓ 音频转录: "${completeTranscript}"`);
         this.callbacks.onAudioTranscriptDone?.(completeTranscript);
         break;
@@ -503,42 +522,56 @@ export class QwenOmniClient {
    * 必须：连接后立即发送，作为第一个事件
    */
   async updateSession(config: SessionConfig): Promise<void> {
-    const event = {
-      "type": "session.update",
-      "session": {
-        // 必选字段
-        "modalities": config.modalities || ["text", "audio"],
-        "voice": config.voice || "Cherry",
-        "input_audio_format": "pcm16",  // 固定值
-        "output_audio_format": "pcm24", // 固定值
-        
-        // 可选字段 - 系统指令
-        "instructions": config.instructions || "你是一个友好的 AI 助手，请自然地进行对话。",
-        
-        // 可选字段 - VAD 模式配置（VAD 模式下服务端自动检测语音）
-        "turn_detection": config.turnDetection || {
-          "type": "server_vad",
-          "threshold": 0.1,              // VAD 灵敏度（0-1，越低越灵敏）
-          "prefix_padding_ms": 500,      // 前导填充（毫秒）
-          "silence_duration_ms": 900     // 停顿检测（毫秒）
-        },
-        
-        // 可选字段 - 输出模态特性
-        "smooth_output": config.smoothOutput !== undefined ? config.smoothOutput : true,
-        
-        // 可选字段 - 生成控制参数
-        "temperature": config.temperature !== undefined ? config.temperature : 0.9,
-        "top_p": config.topP !== undefined ? config.topP : 1.0,
-        "top_k": config.topK !== undefined ? config.topK : 50,
-        "max_tokens": config.maxTokens || 16384,
-        "repetition_penalty": config.repetitionPenalty || 1.05,
-        "presence_penalty": config.presencePenalty || 0.0,
-        "seed": config.seed !== undefined ? config.seed : -1
-      }
+    const defaultTurnDetection: TurnDetectionConfig = {
+      type: 'server_vad',
+      threshold: 0.1,
+      prefix_padding_ms: 500,
+      silence_duration_ms: 900
     };
-    
+
+    const turnDetection =
+      config.turnDetection === undefined ? defaultTurnDetection : config.turnDetection;
+
+    const inputAudioTranscriptionModel =
+      config.inputAudioTranscriptionModel === undefined
+        ? 'gummy-realtime-v1'
+        : config.inputAudioTranscriptionModel;
+
+    const session: Record<string, any> = {
+      modalities: config.modalities || ['text', 'audio'],
+      voice: config.voice || 'Cherry',
+      input_audio_format: 'pcm16',
+      output_audio_format: 'pcm24',
+      instructions: config.instructions || '你是一个友好的 AI 助手，请自然地进行对话。',
+      smooth_output: config.smoothOutput !== undefined ? config.smoothOutput : true,
+      temperature: config.temperature !== undefined ? config.temperature : 0.9,
+      top_p: config.topP !== undefined ? config.topP : 1.0,
+      top_k: config.topK !== undefined ? config.topK : 50,
+      max_tokens: config.maxTokens || 16384,
+      repetition_penalty: config.repetitionPenalty || 1.05,
+      presence_penalty: config.presencePenalty || 0.0
+    };
+
+    // VAD / Turn detection
+    session.turn_detection = turnDetection;
+
+    // 服务器端用户语音转录（用于 conversation.item.input_audio_transcription.completed）
+    if (inputAudioTranscriptionModel) {
+      session.input_audio_transcription = { model: inputAudioTranscriptionModel };
+    }
+
+    // Seed（可选）
+    if (config.seed !== undefined) {
+      session.seed = config.seed;
+    }
+
+    const event = {
+      type: 'session.update',
+      session
+    };
+
     await this.sendEvent(event);
-    
+
     console.log('✓ 会话配置已发送：');
     console.log('  - 音色: ' + event.session.voice);
     console.log('  - 指令: ' + event.session.instructions);
@@ -551,18 +584,21 @@ export class QwenOmniClient {
    * 用途：中断模型当前生成的响应
    */
   async cancelResponse(): Promise<void> {
-    if (!this._currentResponseId) {
-      console.warn('⚠ 没有正在进行的响应，无法取消');
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return;
     }
-    
+
+    if (!this._isResponding) {
+      return;
+    }
+
     const event = {
-      "type": "response.cancel"
+      type: 'response.cancel'
     };
-    
+
     await this.sendEvent(event);
     console.log('⊗ 已取消响应');
-    
+
     this._isResponding = false;
     this._currentResponseId = null;
   }
@@ -677,7 +713,9 @@ export class QwenOmniClient {
     // 生成事件 ID
     event.event_id = this.generateEventId();
     
-    console.log(`📤 发送事件: ${event.type}`, event);
+    if (event.type !== 'input_audio_buffer.append') {
+      console.log(`📤 发送事件: ${event.type}`, event);
+    }
     this.ws.send(JSON.stringify(event));
   }
 
@@ -743,20 +781,30 @@ export class QwenOmniClient {
    * Disconnect WebSocket and cleanup
    */
   async close(): Promise<void> {
+    this.shouldReconnect = false;
     this.stopHeartbeat();
-    
-    if (this.ws) {
-      this.ws.close(1000, 'Client disconnect');
+
+    const ws = this.ws;
+    if (ws) {
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onerror = null;
+      ws.onclose = null;
+
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+        ws.close(1000, 'Client disconnect');
+      }
+
       this.ws = null;
     }
-    
+
     this.isConnected = false;
     this._isResponding = false;
     this._currentResponseId = null;
     this._currentInputItemId = null;
     this._currentOutputItemId = null;
     this.sessionId = null;
-    
+
     console.log('✓ WebSocket connection closed');
     this.callbacks.onClose?.();
   }
