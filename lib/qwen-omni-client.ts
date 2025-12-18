@@ -1,4 +1,3 @@
-import { APP_CONFIG, getEnvironmentConfig } from './constants';
 import { handleWebSocketError, generateRequestId, base64ToBytes } from './utils';
 
 // ========== TypeScript Interfaces ==========
@@ -249,9 +248,12 @@ export class QwenOmniClient {
           throw new Error('API Key is required');
         }
 
-        // 如果没有提供URL，使用默认URL（API Key通过query参数传递）
+        // 如果没有提供URL，使用默认URL（API Key通过 query 参数传递）
+        const model = process.env.NEXT_PUBLIC_QWEN_MODEL || 'qwen3-omni-flash-realtime';
         const auth = encodeURIComponent(`Bearer ${key}`);
-        const wsUrl = url || `wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3-omni-flash-realtime&authorization=${auth}`;
+        const wsUrl =
+          url ||
+          `wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=${encodeURIComponent(model)}&authorization=${auth}`;
         this.ws = new WebSocket(wsUrl);
         
         this.ws.onopen = () => {

@@ -47,8 +47,12 @@ cd starlink
 # 2. 安装依赖
 npm install
 
-# 3. 配置 API Key
-echo "NEXT_PUBLIC_DASHSCOPE_API_KEY=sk-your-api-key" > .env.local
+# 3. 配置 API Key（必填）和模型（可选）
+cat > .env.local << 'EOF'
+NEXT_PUBLIC_DASHSCOPE_API_KEY=sk-your-api-key
+# 可选：指定实时模型（默认 qwen3-omni-flash-realtime）
+NEXT_PUBLIC_QWEN_MODEL=qwen3-omni-flash-realtime
+EOF
 
 # 4. 启动开发服务器
 npm run dev
