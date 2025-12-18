@@ -10,7 +10,7 @@ export const APP_CONFIG = {
     CHANNELS: 1,
     BIT_DEPTH: 16,
     CHUNK_SIZE: 1024,
-    FORMAT: 'audio/wav'
+    FORMAT: 'audio/pcm'
   },
   
   // WebRTC configuration
