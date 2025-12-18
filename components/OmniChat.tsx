@@ -98,7 +98,7 @@ export default function OmniChat() {
           onAudioChunk: (buffer) => {
             // Forward audio chunk to WebSocket
             if (clientRef.current && clientRef.current.getConnectionStatus()) {
-              clientRef.current.streamAudio(buffer);
+              clientRef.current.appendAudio(buffer);
             }
           },
           onAudioLevel: (level) => {
@@ -126,7 +126,7 @@ export default function OmniChat() {
       pcmDecoderRef.current?.dispose();
       audioPlayerRef.current?.dispose();
       audioProcessorRef.current?.dispose();
-      clientRef.current?.close();
+      clientRef.current?.disconnect();
     };
   }, []);
 
@@ -258,7 +258,7 @@ export default function OmniChat() {
       // 2. Setup Client
       const callbacks: QwenOmniCallbacks = {
         onOpen: () => {
-          console.log('✓ Connected to Qwen-Omni');
+          console.log('Connected to Qwen-Omni');
           setConnectionStatus('connected');
 
           // 2.1 VAD (server_vad) session config
@@ -285,32 +285,31 @@ export default function OmniChat() {
 
           // 3. Start Capture after session is ready
           audioProcessorRef.current?.startCapture().then(() => {
-            console.log('✓ Audio capture started, ready for VAD');
             setAppStatus('listening');
           }).catch(err => {
-            console.error('Failed to start audio capture:', err);
-            setErrorMsg(`无法启动麦克风: ${err}`);
+            setErrorMsg(`Failed to start mic: ${err}`);
             setConnectionStatus('error');
           });
         },
+
+        onSessionUpdated: () => {
+           console.log('Session updated');
+        },
         
         onClose: () => {
-          console.log('→ Disconnected');
+          console.log('Disconnected');
           setConnectionStatus('disconnected');
           setAppStatus('idle');
           setAudioLevel(0);
         },
         
-        // ========== 错误处理 ==========
-        onError: (error) => {
-          console.error(`❌ Error [${error.code}]:`, error.message);
-          if (error.param) {
-            console.error(`   参数: ${error.param}`);
-          }
-          setErrorMsg(error.message);
-          if (error.code === 1006 || error.code === 1002) {
-            setConnectionStatus('error');
-            setAppStatus('idle');
+        onError: (error, type) => {
+          console.error(`Error (${type}):`, error);
+          setErrorMsg(`${type || 'Error'}: ${error}`);
+          // Don't necessarily disconnect on all errors, but for connection error we might
+          if (type === 'WebSocket connection error' || type === 'reconnection') {
+             setConnectionStatus('error');
+             setAppStatus('idle');
           }
         },
         
@@ -326,22 +325,6 @@ export default function OmniChat() {
         onAudioTranscriptDelta: (delta) => {
           setTranscript(prev => prev + delta);
           setAppStatus('processing');
-          setTranscript('🤔 处理中...');
-        },
-        
-        onAudioBufferCommitted: (itemId) => {
-          console.log(`✓ 音频缓冲区已提交, 项目ID: ${itemId}`);
-        },
-        
-        onAudioBufferCleared: () => {
-          console.log(`✓ 音频缓冲区已清除`);
-        },
-
-        // ========== 转录事件 ==========
-        onUserTranscript: (transcript) => {
-          console.log(`👤 用户: ${transcript}`);
-          setTranscript('');
-          setConversationHistory(prev => [...prev, { role: 'user', text: transcript }]);
         },
 
         onAudioTranscriptDone: (text) => {
@@ -620,29 +603,19 @@ export default function OmniChat() {
                    </button>
                  )}
 
-                 {/* Status Detail with VAD Mode Indicator */}
+                 {/* Status Detail */}
                  {isConnected && (
-                    <div className="space-y-2">
-                      <div className="text-center py-2 bg-white rounded-lg border border-gray-100">
-                        <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">状态</div>
-                        <div className="font-medium text-blue-600 capitalize flex items-center justify-center gap-2">
-                          {appStatus === 'listening' && <span className="relative flex h-3 w-3"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span><span className="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span></span>}
-                          {appStatus === 'speaking' && <Play size={14} className="animate-pulse" />}
-                          {appStatus === 'processing' && <Loader2 size={14} className="animate-spin" />}
-                          {appStatus === 'idle' && <span className="w-3 h-3 rounded-full bg-gray-400"></span>}
-                          {appStatus === 'listening' && '监听中'}
-                          {appStatus === 'speaking' && '播放中'}
-                          {appStatus === 'processing' && '处理中'}
-                          {appStatus === 'idle' && '空闲'}
-                        </div>
-                      </div>
-
-                      {/* VAD Mode Badge */}
-                      <div className="text-center py-1.5 bg-gradient-to-r from-purple-50 to-blue-50 rounded-lg border border-purple-200">
-                        <div className="text-xs font-semibold text-purple-700 flex items-center justify-center gap-1">
-                          <Activity size={12} />
-                          <span>VAD 模式 (自动检测)</span>
-                        </div>
+                    <div className="text-center py-2 bg-white rounded-lg border border-gray-100">
+                      <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">状态</div>
+                      <div className="font-medium text-blue-600 capitalize flex items-center justify-center gap-2">
+                        {appStatus === 'listening' && <span className="relative flex h-3 w-3"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span><span className="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span></span>}
+                        {appStatus === 'speaking' && <Play size={14} className="animate-pulse" />}
+                        {appStatus === 'processing' && <Loader2 size={14} className="animate-spin" />}
+                        {appStatus === 'idle' && <span className="w-3 h-3 rounded-full bg-gray-400"></span>}
+                        {appStatus === 'listening' && '监听中'}
+                        {appStatus === 'speaking' && '播放中'}
+                        {appStatus === 'processing' && '处理中'}
+                        {appStatus === 'idle' && '空闲'}
                       </div>
                     </div>
                  )}
@@ -787,4 +760,4 @@ export default function OmniChat() {
       </div>
     </div>
   );
-}
+  }
