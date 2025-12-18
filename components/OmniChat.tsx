@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Mic, MicOff, Volume2, VolumeX, Wifi, WifiOff, Play, Pause, Trash2, Activity, Loader2, Shield, ShieldCheck, AlertCircle, RefreshCw } from 'lucide-react';
+import { Mic, MicOff, Volume2, VolumeX, Wifi, WifiOff, Play, Trash2, Activity, Loader2, Shield, ShieldCheck, AlertCircle, RefreshCw } from 'lucide-react';
 import { QwenOmniClient, QwenOmniCallbacks } from '../lib/qwen-omni-client';
 import { PCMDecoder } from '../lib/audio/pcm-decoder';
 import { AudioPlayer } from '../lib/audio/audio-player';
@@ -24,7 +24,6 @@ export default function OmniChat() {
   const [conversationHistory, setConversationHistory] = useState<{role: 'user' | 'assistant', text: string}[]>([]);
   const [volume, setVolume] = useState(0.7);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [isPaused, setIsPaused] = useState(false);
   const [voice, setVoice] = useState('Cherry');
   
   // 权限和连接测试状态
@@ -79,16 +78,9 @@ export default function OmniChat() {
           autoPlay: false,
           onPlay: () => {
             setAppStatus('speaking');
-            setIsPaused(false);
-          },
-          onPause: () => {
-            setIsPaused(true);
           },
           onEnded: () => {
-            if (connectionStatus === 'connected') {
-              setAppStatus('idle'); // Or back to listening if we were in continuous mode
-            }
-            setIsPaused(false);
+            setAppStatus('listening');
           },
           onError: (error) => {
             console.error('Audio player error:', error);
@@ -106,7 +98,7 @@ export default function OmniChat() {
           onAudioChunk: (buffer) => {
             // Forward audio chunk to WebSocket
             if (clientRef.current && clientRef.current.getConnectionStatus()) {
-              clientRef.current.streamAudio(buffer);
+              clientRef.current.appendAudio(buffer);
             }
           },
           onAudioLevel: (level) => {
@@ -134,7 +126,7 @@ export default function OmniChat() {
       pcmDecoderRef.current?.dispose();
       audioPlayerRef.current?.dispose();
       audioProcessorRef.current?.dispose();
-      clientRef.current?.close();
+      clientRef.current?.disconnect();
     };
   }, []);
 
@@ -231,26 +223,14 @@ export default function OmniChat() {
     if (!pcmDecoderRef.current || !audioPlayerRef.current) return;
 
     try {
-      // Decode PCM24
       const float32Audio = pcmDecoderRef.current.decodePCM(audioData, 24);
-      
-      if (float32Audio.length > 0) {
-        // Create AudioBuffer
-        const playbackBuffer = pcmDecoderRef.current.createAudioBuffer(float32Audio);
-        
-        // Add to queue
-        audioPlayerRef.current.addToQueue(playbackBuffer);
-        
-        // Auto-play if not playing
-        const status = audioPlayerRef.current.getStatus();
-        if (!status.isPlaying && !isPaused && status.queueLength === 1) {
-          audioPlayerRef.current.play().catch(e => console.error("Auto-play failed", e));
-        }
-      }
+      if (float32Audio.length === 0) return;
+
+      audioPlayerRef.current.enqueueFloat32Chunk(float32Audio, 24000);
     } catch (error) {
       console.error('Error processing audio data:', error);
     }
-  }, [isPaused]);
+  }, []);
 
   // Start Voice Session
   const startSession = async () => {
@@ -278,176 +258,100 @@ export default function OmniChat() {
       // 2. Setup Client
       const callbacks: QwenOmniCallbacks = {
         onOpen: () => {
-          console.log('✓ Connected to Qwen-Omni');
+          console.log('Connected to Qwen-Omni');
           setConnectionStatus('connected');
-          
-          // 2.1 Update Session immediately after connection with full VAD configuration
+
+          // 2.1 VAD (server_vad) session config
           clientRef.current?.updateSession({
             modalities: ['text', 'audio'],
             voice: voice,
-            instructions: '你是一个友好的 AI 助手，请自然地进行对话。',
-            turnDetection: {
-              type: 'server_vad',
-              threshold: 0.1,              // VAD 灵敏度（0-1，越低越灵敏）
-              prefix_padding_ms: 500,      // 前导填充（毫秒）
-              silence_duration_ms: 900     // 停顿检测（毫秒）
+            instructions: '你是小云，风趣幽默的好助手，请自然地进行对话。',
+            input_audio_format: 'pcm16',
+            output_audio_format: 'pcm24',
+            input_audio_transcription: {
+              model: 'gummy-realtime-v1'
             },
-            smoothOutput: true,
-            temperature: 0.9,
-            topP: 1.0,
-            topK: 50,
-            maxTokens: 16384,
-            repetitionPenalty: 1.05,
-            presencePenalty: 0.0
+            turn_detection: {
+              type: 'server_vad',
+              threshold: 0.1,
+              prefix_padding_ms: 500,
+              silence_duration_ms: 900
+            }
           });
         },
-        
-        onSessionCreated: (session) => {
-          console.log(`✓ Session created: ${session.id}`);
-        },
 
-        onSessionUpdated: (session) => {
-          console.log('✓ Session updated, VAD mode enabled');
-          // 3. Start audio capture after session configuration is confirmed
+        onSessionCreated: (sessionId) => {
+          console.log('Session created:', sessionId);
+
+          // 3. Start Capture after session is ready
           audioProcessorRef.current?.startCapture().then(() => {
-            console.log('✓ Audio capture started, ready for VAD');
             setAppStatus('listening');
           }).catch(err => {
-            console.error('Failed to start audio capture:', err);
-            setErrorMsg(`无法启动麦克风: ${err}`);
+            setErrorMsg(`Failed to start mic: ${err}`);
             setConnectionStatus('error');
           });
         },
+
+        onSessionUpdated: () => {
+           console.log('Session updated');
+        },
         
         onClose: () => {
-          console.log('→ Disconnected');
+          console.log('Disconnected');
           setConnectionStatus('disconnected');
           setAppStatus('idle');
           setAudioLevel(0);
         },
         
-        // ========== 错误处理 ==========
-        onError: (error) => {
-          console.error(`❌ Error [${error.code}]:`, error.message);
-          if (error.param) {
-            console.error(`   参数: ${error.param}`);
-          }
-          setErrorMsg(error.message);
-          if (error.code === 1006 || error.code === 1002) {
-            setConnectionStatus('error');
-            setAppStatus('idle');
+        onError: (error, type) => {
+          console.error(`Error (${type}):`, error);
+          setErrorMsg(`${type || 'Error'}: ${error}`);
+          // Don't necessarily disconnect on all errors, but for connection error we might
+          if (type === 'WebSocket connection error' || type === 'reconnection') {
+             setConnectionStatus('error');
+             setAppStatus('idle');
           }
         },
         
-        // ========== 用户输入事件 ==========
-        onSpeechStarted: (audioStartMs) => {
-          console.log(`✓ 检测到语音开始 (${audioStartMs}ms)`);
-          setAppStatus('listening');
-          setTranscript('🎤 正在听...');
-        },
-        
-        onSpeechStopped: (audioEndMs) => {
-          console.log(`✓ 检测到语音结束 (${audioEndMs}ms)`);
+        onResponseCreated: () => {
+          setTranscript('');
           setAppStatus('processing');
-          setTranscript('🤔 处理中...');
-        },
-        
-        onAudioBufferCommitted: (itemId) => {
-          console.log(`✓ 音频缓冲区已提交, 项目ID: ${itemId}`);
-        },
-        
-        onAudioBufferCleared: () => {
-          console.log(`✓ 音频缓冲区已清除`);
         },
 
-        // ========== 转录事件 ==========
-        onUserTranscript: (transcript) => {
-          console.log(`👤 用户: ${transcript}`);
-          setTranscript('');
-          setConversationHistory(prev => [...prev, { role: 'user', text: transcript }]);
-        },
-        
-        onTranscriptionError: (error) => {
-          console.error(`❌ 转录失败 [${error.code}]: ${error.message}`);
-          setErrorMsg(`转录失败: ${error.message}`);
-        },
-
-        // ========== 响应事件 ==========
-        onResponseCreated: (response) => {
-          console.log(`→ 开始生成回复 (ID: ${response.id})`);
-          setAppStatus('processing');
-          setTranscript('💭 AI 正在思考...');
-        },
-        
-        onResponseDone: (response) => {
-          console.log(`✓ 回复完成 (状态: ${response.status})`);
-          setAppStatus('listening');  // 回到listening状态，准备下一轮对话
-          setTranscript('');
-        },
-        
-        // ========== 文本输出事件 ==========
-        onTextDelta: (delta) => {
-          setTranscript(prev => prev + delta);
-        },
-        
-        onTextDone: (text) => {
-          console.log(`✓ 文本完成: "${text}"`);
-          setTranscript('');
-          setConversationHistory(prev => [...prev, { role: 'assistant', text }]);
-        },
-        
-        // ========== 音频输出事件 ==========
-        onAudioDelta: (audioBytes) => {
-          // Process audio for playback
-          const audioBuffer = audioBytes.buffer as ArrayBuffer;
-          processAndQueueAudio(audioBuffer);
-        },
-        
-        onAudioDone: () => {
-          console.log(`✓ 音频生成完成`);
+        onInputAudioTranscriptionCompleted: (text) => {
+          setConversationHistory(prev => [...prev, { role: 'user', text }]);
         },
 
         onAudioTranscriptDelta: (delta) => {
-          console.log(`🤖 助手: ${delta}`, '');
-          setTranscript(prev => {
-            const currentText = prev.startsWith('💭') ? '' : prev;
-            return currentText + delta;
-          });
-          setAppStatus('speaking');
+          setTranscript(prev => prev + delta);
+          setAppStatus('processing');
         },
-        
-        onAudioTranscriptDone: (transcript) => {
-          console.log(`✓ 音频转录: "${transcript}"`);
+
+        onAudioTranscriptDone: (text) => {
           setTranscript('');
-          setConversationHistory(prev => [...prev, { role: 'assistant', text: transcript }]);
-        },
-
-        // ========== 对话项目事件 ==========
-        onConversationItemCreated: (item) => {
-          console.log(`✓ 对话项已创建: ${item.id} (角色: ${item.role}, 状态: ${item.status})`);
-        },
-
-        // ========== 输出项目事件 ==========
-        onOutputItemAdded: (item) => {
-          console.log(`→ 输出项目已添加 (ID: ${item.id}, 角色: ${item.role})`);
-        },
-        
-        onOutputItemDone: (item) => {
-          console.log(`✓ 输出项目完成 (ID: ${item.id})`);
-        },
-
-        // ========== 内容部分事件 ==========
-        onContentPartAdded: (part) => {
-          console.log(`→ 内容部分已添加 (类型: ${part.type})`);
-        },
-        
-        onContentPartDone: (part) => {
-          console.log(`✓ 内容部分完成 (类型: ${part.type})`);
-          if (part.type === 'audio') {
-            console.log(`  音频转录: "${part.text || ''}"`);
-          } else if (part.type === 'text') {
-            console.log(`  文本: "${part.text || ''}"`);
+          if (text) {
+            setConversationHistory(prev => [...prev, { role: 'assistant', text }]);
           }
+        },
+
+        onResponseDone: () => {
+          setAppStatus('listening');
+        },
+
+        onAudioData: (audioData) => {
+          processAndQueueAudio(audioData);
+        },
+
+        onSpeechStarted: () => {
+          // If user starts speaking while assistant audio is playing, stop local playback immediately.
+          audioPlayerRef.current?.stop();
+          audioPlayerRef.current?.clearQueue();
+          setTranscript('');
+          setAppStatus('listening');
+        },
+
+        onSpeechStopped: () => {
+          console.log('Speech stopped');
         }
       };
 
@@ -471,19 +375,20 @@ export default function OmniChat() {
     if (audioProcessorRef.current?.isActive()) {
       audioProcessorRef.current.stopCapture();
     }
-    
-    // Commit remaining audio and disconnect
+
+    audioPlayerRef.current?.stop();
+    audioPlayerRef.current?.clearQueue();
+    setTranscript('');
+    setAppStatus('idle');
+
     if (clientRef.current && clientRef.current.getConnectionStatus()) {
-       clientRef.current.commitAudioBuffer();
-       
-       // For a "Stop" button, disconnect everything
-       setTimeout(() => {
-         clientRef.current?.close();
-         audioPlayerRef.current?.stop();
-         audioPlayerRef.current?.clearQueue();
-       }, 500);
+      // VAD 模式下无需 commit，直接结束会话并断开连接
+      clientRef.current.finish();
+      setTimeout(() => {
+        clientRef.current?.disconnect();
+      }, 200);
     } else {
-        clientRef.current?.close();
+      clientRef.current?.disconnect();
     }
   };
 
@@ -698,29 +603,19 @@ export default function OmniChat() {
                    </button>
                  )}
 
-                 {/* Status Detail with VAD Mode Indicator */}
+                 {/* Status Detail */}
                  {isConnected && (
-                    <div className="space-y-2">
-                      <div className="text-center py-2 bg-white rounded-lg border border-gray-100">
-                        <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">状态</div>
-                        <div className="font-medium text-blue-600 capitalize flex items-center justify-center gap-2">
-                          {appStatus === 'listening' && <span className="relative flex h-3 w-3"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span><span className="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span></span>}
-                          {appStatus === 'speaking' && <Play size={14} className="animate-pulse" />}
-                          {appStatus === 'processing' && <Loader2 size={14} className="animate-spin" />}
-                          {appStatus === 'idle' && <span className="w-3 h-3 rounded-full bg-gray-400"></span>}
-                          {appStatus === 'listening' && '监听中'}
-                          {appStatus === 'speaking' && '播放中'}
-                          {appStatus === 'processing' && '处理中'}
-                          {appStatus === 'idle' && '空闲'}
-                        </div>
-                      </div>
-
-                      {/* VAD Mode Badge */}
-                      <div className="text-center py-1.5 bg-gradient-to-r from-purple-50 to-blue-50 rounded-lg border border-purple-200">
-                        <div className="text-xs font-semibold text-purple-700 flex items-center justify-center gap-1">
-                          <Activity size={12} />
-                          <span>VAD 模式 (自动检测)</span>
-                        </div>
+                    <div className="text-center py-2 bg-white rounded-lg border border-gray-100">
+                      <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">状态</div>
+                      <div className="font-medium text-blue-600 capitalize flex items-center justify-center gap-2">
+                        {appStatus === 'listening' && <span className="relative flex h-3 w-3"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span><span className="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span></span>}
+                        {appStatus === 'speaking' && <Play size={14} className="animate-pulse" />}
+                        {appStatus === 'processing' && <Loader2 size={14} className="animate-spin" />}
+                        {appStatus === 'idle' && <span className="w-3 h-3 rounded-full bg-gray-400"></span>}
+                        {appStatus === 'listening' && '监听中'}
+                        {appStatus === 'speaking' && '播放中'}
+                        {appStatus === 'processing' && '处理中'}
+                        {appStatus === 'idle' && '空闲'}
                       </div>
                     </div>
                  )}
@@ -865,4 +760,4 @@ export default function OmniChat() {
       </div>
     </div>
   );
-}
+  }
