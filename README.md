@@ -49,6 +49,7 @@ npm install
 
 # 3. 配置 API Key
 echo "NEXT_PUBLIC_DASHSCOPE_API_KEY=sk-your-api-key" > .env.local
+echo "NEXT_PUBLIC_QWEN_MODEL=qwen3-omni-flash-realtime" >> .env.local
 
 # 4. 启动开发服务器
 npm run dev
@@ -243,6 +244,9 @@ npm test
 ```bash
 # 必需
 NEXT_PUBLIC_DASHSCOPE_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+# 可选
+NEXT_PUBLIC_QWEN_MODEL=qwen3-omni-flash-realtime  # 指定使用的模型
 
 # 可选（用于服务端）
 DASHSCOPE_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
