@@ -23,7 +23,7 @@ export class PCMDecoder {
     this.options = {
       sampleRate: options.sampleRate || APP_CONFIG.AUDIO.SAMPLE_RATE,
       channels: options.channels || APP_CONFIG.AUDIO.CHANNELS,
-      bitDepth: options.bitDepth || 24, // Default to 24-bit for high quality
+      bitDepth: options.bitDepth || 16, // Default to 24-bit for high quality 12.19 default16bit
     };
   }
 
