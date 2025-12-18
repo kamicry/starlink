@@ -27,9 +27,11 @@ export async function testQwenConnection(apiKey: string): Promise<ConnectionTest
     console.log('🔄 正在测试 API 连接...');
     
     // 创建 WebSocket 连接
-    const ws = new WebSocket(
-      'wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3-omni-flash-realtime'
-    );
+    const url = new URL('wss://dashscope.aliyuncs.com/api-ws/v1/realtime');
+    url.searchParams.set('model', 'qwen3-omni-flash-realtime');
+    url.searchParams.set('api_key', apiKey);
+
+    const ws = new WebSocket(url.toString());
 
     return new Promise((resolve) => {
       // 10秒超时
