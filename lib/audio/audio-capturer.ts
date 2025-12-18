@@ -7,6 +7,7 @@ export interface AudioCapturerOptions {
   bufferSize?: number;
   useContinuousCapture?: boolean;
   onData?: (audioData: Float32Array) => void;
+  onLevel?: (level: number) => void;
   onError?: (error: string) => void;
 }
 
@@ -28,6 +29,7 @@ export class AudioCapturer {
       bufferSize: options.bufferSize || APP_CONFIG.AUDIO.CHUNK_SIZE,
       useContinuousCapture: options.useContinuousCapture || false,
       onData: options.onData,
+      onLevel: options.onLevel,
       onError: options.onError
     };
   }
@@ -126,6 +128,7 @@ export class AudioCapturer {
     this.processor = this.audioContext.createScriptProcessor(bufferSize, this.options.channels || 1, this.options.channels || 1);
 
     // Connect: source -> analyser -> processor -> destination
+    this.analyser.connect(this.processor);
     this.processor.connect(this.audioContext.destination);
 
     this.processor.onaudioprocess = (event) => {
@@ -235,13 +238,7 @@ export class AudioCapturer {
       const rms = Math.sqrt(sum / dataArray.length);
       const audioLevel = Math.min(100, rms * 200);
 
-      // Emit audio level for real-time visualization
-      if (this.options.onData) {
-        // Create a small buffer with the current audio level
-        const buffer = new Float32Array(1);
-        buffer[0] = audioLevel / 100;
-        this.options.onData(buffer);
-      }
+      this.options.onLevel?.(audioLevel);
 
       this.animationFrame = requestAnimationFrame(analyze);
     };

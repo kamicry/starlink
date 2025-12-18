@@ -27,9 +27,13 @@ export async function testQwenConnection(apiKey: string): Promise<ConnectionTest
     console.log('🔄 正在测试 API 连接...');
     
     // 创建 WebSocket 连接
-    const ws = new WebSocket(
-      'wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=qwen3-omni-flash-realtime'
-    );
+    // 注意：model / apiKey 来自 .env 时可能包含空格/换行（例如 CRLF），这里做 trim 防御
+    const defaultModel = 'qwen3-omni-flash-realtime';
+    const model = (process.env.NEXT_PUBLIC_QWEN_MODEL || '').trim() || defaultModel;
+    const auth = encodeURIComponent(`Bearer ${String(apiKey).trim()}`);
+    const wsUrl = `wss://dashscope.aliyuncs.com/api-ws/v1/realtime?model=${encodeURIComponent(model)}&authorization=${auth}`;
+
+    const ws = new WebSocket(wsUrl);
 
     return new Promise((resolve) => {
       // 10秒超时
@@ -48,15 +52,15 @@ export async function testQwenConnection(apiKey: string): Promise<ConnectionTest
 
       ws.onopen = () => {
         const latency = Date.now() - startTime;
-        
+
         try {
-          ws.close();
+          ws.close(1000, 'connection test');
         } catch (e) {
           // 忽略关闭错误
         }
-        
+
         clearTimeout(timeout);
-        
+
         console.log(`✅ API 连接成功，延迟: ${latency}ms`);
         resolve({
           success: true,

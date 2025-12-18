@@ -106,7 +106,7 @@ export default function OmniChat() {
           onAudioChunk: (buffer) => {
             // Forward audio chunk to WebSocket
             if (clientRef.current && clientRef.current.getConnectionStatus()) {
-              clientRef.current.streamAudio(buffer);
+              clientRef.current.streamAudio(buffer).catch(() => {});
             }
           },
           onAudioLevel: (level) => {
@@ -280,12 +280,13 @@ export default function OmniChat() {
         onOpen: () => {
           console.log('✓ Connected to Qwen-Omni');
           setConnectionStatus('connected');
-          
+
           // 2.1 Update Session immediately after connection with full VAD configuration
           clientRef.current?.updateSession({
             modalities: ['text', 'audio'],
             voice: voice,
             instructions: '你是一个友好的 AI 助手，请自然地进行对话。',
+            inputAudioTranscriptionModel: 'gummy-realtime-v1',
             turnDetection: {
               type: 'server_vad',
               threshold: 0.1,              // VAD 灵敏度（0-1，越低越灵敏）
@@ -299,6 +300,10 @@ export default function OmniChat() {
             maxTokens: 16384,
             repetitionPenalty: 1.05,
             presencePenalty: 0.0
+          }).catch(err => {
+            console.error('Failed to update session:', err);
+            setErrorMsg(`会话配置失败: ${err?.message || err}`);
+            setConnectionStatus('error');
           });
         },
         
@@ -342,6 +347,9 @@ export default function OmniChat() {
         // ========== 用户输入事件 ==========
         onSpeechStarted: (audioStartMs) => {
           console.log(`✓ 检测到语音开始 (${audioStartMs}ms)`);
+          audioPlayerRef.current?.stop();
+          audioPlayerRef.current?.clearQueue();
+          setIsPaused(false);
           setAppStatus('listening');
           setTranscript('🎤 正在听...');
         },
@@ -471,19 +479,12 @@ export default function OmniChat() {
     if (audioProcessorRef.current?.isActive()) {
       audioProcessorRef.current.stopCapture();
     }
-    
-    // Commit remaining audio and disconnect
-    if (clientRef.current && clientRef.current.getConnectionStatus()) {
-       clientRef.current.commitAudioBuffer();
-       
-       // For a "Stop" button, disconnect everything
-       setTimeout(() => {
-         clientRef.current?.close();
-         audioPlayerRef.current?.stop();
-         audioPlayerRef.current?.clearQueue();
-       }, 500);
-    } else {
-        clientRef.current?.close();
+
+    audioPlayerRef.current?.stop();
+    audioPlayerRef.current?.clearQueue();
+
+    if (clientRef.current) {
+      await clientRef.current.close();
     }
   };
 
