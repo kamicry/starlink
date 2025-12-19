@@ -69,7 +69,7 @@ export default function OmniChat() {
         pcmDecoderRef.current = new PCMDecoder({
           sampleRate: 24000, // Output format is usually 24kHz for high quality text-to-speech
           channels: 1,
-          bitDepth: 24
+          bitDepth: 16
         });
 
         // Initialize Audio Smoother
@@ -228,8 +228,8 @@ export default function OmniChat() {
     if (!pcmDecoderRef.current || !audioPlayerRef.current || !audioSmootherRef.current) return;
 
     try {
-      // Decode PCM24 to Float32
-      let processedAudio = pcmDecoderRef.current.decodePCM(audioData, 24);
+      // Decode PCM16 (S16LE) to Float32
+      let processedAudio = pcmDecoderRef.current.decodePCM(audioData, 16);
       if (processedAudio.length === 0) return;
 
       // Calculate audio statistics for debugging (only log occasionally)
@@ -320,7 +320,7 @@ export default function OmniChat() {
             voice: voice,
             instructions: '你是小云，风趣幽默的好助手，请自然地进行对话。',
             input_audio_format: 'pcm16',
-            output_audio_format: 'pcm24',
+            output_audio_format: 's16le',
             input_audio_transcription: {
               model: 'gummy-realtime-v1'
             },
