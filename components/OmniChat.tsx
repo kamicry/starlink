@@ -320,7 +320,7 @@ export default function OmniChat() {
             voice: voice,
             instructions: '你是小云，风趣幽默的好助手，请自然地进行对话。',
             input_audio_format: 'pcm16',
-            output_audio_format: 's16le',
+            output_audio_format: 'pcm16',
             input_audio_transcription: {
               model: 'gummy-realtime-v1'
             },
