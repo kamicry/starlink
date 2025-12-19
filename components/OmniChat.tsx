@@ -1,7 +1,11 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Mic, MicOff, Volume2, VolumeX, Wifi, WifiOff, Play, Trash2, Activity, Loader2, Shield, ShieldCheck, AlertCircle, RefreshCw } from 'lucide-react';
+import { 
+  Mic, MicOff, Volume2, VolumeX, Wifi, WifiOff, Play, Trash2, 
+  Activity, Loader2, Shield, ShieldCheck, AlertCircle, RefreshCw,
+  User, Bot, MessageSquare, Settings, BarChart2, Zap, Sparkles
+} from 'lucide-react';
 import { QwenOmniClient, QwenOmniCallbacks } from '../lib/qwen-omni-client';
 import { PCMDecoder } from '../lib/audio/pcm-decoder';
 import { AudioPlayer } from '../lib/audio/audio-player';
@@ -465,353 +469,370 @@ export default function OmniChat() {
   }, []);
 
   return (
-    <div className="w-full max-w-4xl mx-auto p-4 md:p-6 bg-white rounded-xl shadow-lg my-8">
-      {/* Header */}
-      <header className="flex justify-between items-center mb-8 border-b pb-4">
-        <div>
-           <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
-             <Activity className="text-blue-600" />
-             OmniChat
-           </h1>
-           <p className="text-gray-500 text-sm mt-1">Real-time Voice Interaction</p>
-        </div>
+    <div className="w-full max-w-6xl mx-auto my-4 md:my-8 relative z-10">
+      <div className="bg-white/90 backdrop-blur-xl rounded-3xl shadow-2xl border border-white/40 overflow-hidden flex flex-col md:flex-row h-[85vh] md:h-[800px] transition-all duration-300">
         
-        {/* Connection Indicator */}
-        <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-full border">
-          {connectionStatus === 'connecting' ? (
-             <Loader2 className="animate-spin text-orange-500" size={16} />
-          ) : isConnected ? (
-             <Wifi className="text-green-500" size={16} />
-          ) : (
-             <WifiOff className="text-gray-400" size={16} />
-          )}
-          <span className={`text-sm font-medium ${
-            isConnected ? 'text-green-600' : 
-            connectionStatus === 'connecting' ? 'text-orange-600' :
-            connectionStatus === 'error' ? 'text-red-600' : 'text-gray-500'
-          }`}>
-            {connectionStatus === 'connected' ? 'Connected' : 
-             connectionStatus === 'connecting' ? 'Connecting...' : 
-             connectionStatus === 'error' ? 'Error' : 'Disconnected'}
-          </span>
-        </div>
-      </header>
-
-      {/* Main Content Area */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        
-        {/* Left Column: Controls */}
-        <div className="md:col-span-1 space-y-6">
+        {/* Sidebar (Left) */}
+        <div className="w-full md:w-80 bg-gray-50/80 border-r border-gray-100 flex flex-col backdrop-blur-sm">
+           {/* Header */}
+           <div className="p-6 border-b border-gray-200/50 bg-white/50">
+              <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent flex items-center gap-2">
+                <Sparkles className="text-blue-600 fill-blue-100" />
+                OmniChat
+              </h1>
+              <p className="text-gray-500 text-xs font-medium mt-1 tracking-wide">REAL-TIME VOICE AI</p>
+           </div>
            
-           {/* Browser Compatibility Warning */}
-           {browserCompatibility && !browserCompatibility.recommended && (
-             <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-               <div className="flex items-start gap-2">
-                 <AlertCircle className="text-red-500 flex-shrink-0 mt-0.5" size={16} />
-                 <div className="text-sm">
-                   <div className="font-medium text-red-800 mb-1">浏览器兼容性警告</div>
-                   <ul className="text-red-700 text-xs space-y-1">
-                     {browserCompatibility.issues.map((issue, idx) => (
-                       <li key={idx}>• {issue}</li>
-                     ))}
-                   </ul>
+           {/* Controls Area */}
+           <div className="flex-1 p-6 space-y-6 overflow-y-auto">
+              
+              {/* Browser Warning */}
+              {browserCompatibility && !browserCompatibility.recommended && (
+                <div className="bg-red-50 border border-red-200 rounded-xl p-4 shadow-sm">
+                  <div className="flex items-start gap-3">
+                    <AlertCircle className="text-red-500 flex-shrink-0 mt-0.5" size={18} />
+                    <div className="text-sm">
+                      <div className="font-semibold text-red-800 mb-1">Compatibility Issue</div>
+                      <ul className="text-red-700 text-xs space-y-1">
+                        {browserCompatibility.issues.map((issue, idx) => (
+                          <li key={idx}>• {issue}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Status Section */}
+              <div className="space-y-4">
+                 <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Connection</span>
+                    <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${
+                        isConnected ? 'bg-green-50 text-green-700 border-green-200' : 
+                        connectionStatus === 'connecting' ? 'bg-orange-50 text-orange-700 border-orange-200' :
+                        connectionStatus === 'error' ? 'bg-red-50 text-red-700 border-red-200' : 'bg-gray-100 text-gray-500 border-gray-200'
+                      }`}>
+                      {connectionStatus === 'connecting' ? <Loader2 size={12} className="animate-spin" /> : 
+                       isConnected ? <Wifi size={12} /> : <WifiOff size={12} />}
+                      {connectionStatus === 'connected' ? 'Online' : 
+                       connectionStatus === 'connecting' ? 'Connecting' : 
+                       connectionStatus === 'error' ? 'Error' : 'Offline'}
+                    </div>
                  </div>
-               </div>
-             </div>
-           )}
 
-           {/* Permission & Connection Status Panel */}
-           <div className="bg-gray-50 rounded-lg p-4 border border-gray-100">
-              <div className="flex flex-col gap-4">
-                 
-                 {/* Step 1: Request Microphone Permission */}
-                 {permissionStatus === 'not_requested' && (
-                   <button
-                     onClick={handleRequestMicrophonePermission}
-                     disabled={!isBrowserSupported || isRetryingPermission}
-                     className={`w-full py-3 rounded-xl flex flex-col items-center justify-center gap-2 transition-all ${
-                       !isBrowserSupported 
-                         ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                         : 'bg-blue-600 hover:bg-blue-700 text-white shadow-md hover:shadow-lg'
-                     }`}
-                   >
-                     <Shield size={20} />
-                     <span className="font-medium text-sm">请求麦克风权限</span>
-                   </button>
-                 )}
-
-                 {permissionStatus === 'requesting' && (
-                   <div className="w-full py-3 rounded-xl flex flex-col items-center justify-center gap-2 bg-blue-100 text-blue-700">
-                     <Loader2 className="animate-spin" size={20} />
-                     <span className="font-medium text-sm">正在请求权限...</span>
-                   </div>
-                 )}
-
-                 {(permissionStatus === 'granted' || permissionStatus === 'error' || permissionStatus === 'denied') && (
-                   <div className={`w-full py-3 rounded-xl flex items-center justify-center gap-2 ${
-                     permissionStatus === 'granted' 
-                       ? 'bg-green-100 text-green-700' 
-                       : 'bg-red-100 text-red-700'
-                   }`}>
-                     {permissionStatus === 'granted' ? (
-                       <>
-                         <ShieldCheck size={18} />
-                         <span className="font-medium text-sm">✅ 麦克风已就绪</span>
-                       </>
-                     ) : (
-                       <>
-                         <AlertCircle size={18} />
-                         <span className="font-medium text-sm">
-                           {permissionStatus === 'denied' ? '❌ 麦克风权限被拒绝' : '❌ 权限请求失败'}
-                         </span>
-                       </>
-                     )}
-                   </div>
-                 )}
-
-                 {/* Step 2: Test API Connection */}
-                 {permissionStatus === 'granted' && connectionTestStatus === 'not_tested' && (
-                   <button
-                     onClick={handleTestConnection}
-                     disabled={isRetryingConnection}
-                     className="w-full py-3 rounded-xl flex flex-col items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white shadow-md hover:shadow-lg transition-all"
-                   >
-                     <Wifi size={20} />
-                     <span className="font-medium text-sm">测试 API 连接</span>
-                   </button>
-                 )}
-
-                 {connectionTestStatus === 'testing' && (
-                   <div className="w-full py-3 rounded-xl flex flex-col items-center justify-center gap-2 bg-green-100 text-green-700">
-                     <Loader2 className="animate-spin" size={20} />
-                     <span className="font-medium text-sm">🔄 测试连接中...</span>
-                   </div>
-                 )}
-
-                 {connectionTestStatus === 'success' && (
-                   <div className="w-full py-3 rounded-xl flex flex-col items-center justify-center gap-1 bg-green-100 text-green-700">
-                     <div className="flex items-center gap-2">
-                       <Wifi className="text-green-600" size={18} />
-                       <span className="font-medium text-sm">✅ API 连接正常</span>
-                     </div>
-                     {connectionLatency && (
-                       <span className="text-xs text-green-600">延迟: {connectionLatency}ms</span>
-                     )}
-                   </div>
-                 )}
-
-                 {(connectionTestStatus === 'failed' || connectionTestStatus === 'not_tested') && permissionStatus !== 'granted' && (
-                   <div className="text-center py-2 text-xs text-gray-500">
-                     {connectionTestStatus === 'failed' ? connectionTestMessage : '请先完成麦克风权限设置'}
-                   </div>
-                 )}
-
-                 {/* Connection Test Failed - Show Retry */}
-                 {connectionTestStatus === 'failed' && (
-                   <button
-                     onClick={retryConnection}
-                     disabled={isRetryingConnection}
-                     className="w-full py-2 rounded-lg flex items-center justify-center gap-2 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 transition-all"
-                   >
-                     <RefreshCw size={16} className={isRetryingConnection ? 'animate-spin' : ''} />
-                     <span className="font-medium text-sm">重试连接</span>
-                   </button>
-                 )}
-
-                 {/* Permission Failed - Show Retry */}
-                 {permissionStatus === 'denied' && (
-                   <button
-                     onClick={retryMicrophonePermission}
-                     disabled={isRetryingPermission}
-                     className="w-full py-2 rounded-lg flex items-center justify-center gap-2 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 transition-all"
-                   >
-                     <RefreshCw size={16} className={isRetryingPermission ? 'animate-spin' : ''} />
-                     <span className="font-medium text-sm">重新请求权限</span>
-                   </button>
-                 )}
-
-                 {/* Step 3: Start Voice Session */}
-                 {!isConnected && permissionStatus === 'granted' && connectionTestStatus === 'success' && (
-                   <button
-                     onClick={startSession}
-                     disabled={connectionStatus === 'connecting'}
-                     className={`w-full py-4 rounded-xl flex flex-col items-center justify-center gap-2 transition-all ${
-                       connectionStatus === 'connecting' 
-                         ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                         : 'bg-blue-600 hover:bg-blue-700 text-white shadow-md hover:shadow-lg'
-                     }`}
-                   >
-                     <Mic size={24} />
-                     <span className="font-semibold">开始语音</span>
-                   </button>
-                 )}
-
-                 {/* Stop Voice Button */}
                  {isConnected && (
-                   <button
-                     onClick={stopSession}
-                     className="w-full py-4 rounded-xl flex flex-col items-center justify-center gap-2 bg-red-500 hover:bg-red-600 text-white shadow-md hover:shadow-lg transition-all"
-                   >
-                     <MicOff size={24} />
-                     <span className="font-semibold">停止语音</span>
-                   </button>
-                 )}
-
-                 {/* Status Detail */}
-                 {isConnected && (
-                    <div className="text-center py-2 bg-white rounded-lg border border-gray-100">
-                      <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">状态</div>
-                      <div className="font-medium text-blue-600 capitalize flex items-center justify-center gap-2">
-                        {appStatus === 'listening' && <span className="relative flex h-3 w-3"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span><span className="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span></span>}
-                        {appStatus === 'speaking' && <Play size={14} className="animate-pulse" />}
-                        {appStatus === 'processing' && <Loader2 size={14} className="animate-spin" />}
-                        {appStatus === 'idle' && <span className="w-3 h-3 rounded-full bg-gray-400"></span>}
-                        {appStatus === 'listening' && '监听中'}
-                        {appStatus === 'speaking' && '播放中'}
-                        {appStatus === 'processing' && '处理中'}
-                        {appStatus === 'idle' && '空闲'}
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Status</span>
+                      <div className="flex items-center gap-2">
+                         {appStatus === 'listening' && (
+                           <span className="flex items-center gap-1.5 text-blue-600 text-xs font-semibold bg-blue-50 px-2 py-1 rounded-full border border-blue-100">
+                             <span className="relative flex h-2 w-2">
+                               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                               <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500"></span>
+                             </span>
+                             Listening
+                           </span>
+                         )}
+                         {appStatus === 'speaking' && (
+                           <span className="flex items-center gap-1.5 text-indigo-600 text-xs font-semibold bg-indigo-50 px-2 py-1 rounded-full border border-indigo-100">
+                             <BarChart2 size={12} className="animate-pulse" />
+                             Speaking
+                           </span>
+                         )}
+                         {appStatus === 'processing' && (
+                           <span className="flex items-center gap-1.5 text-purple-600 text-xs font-semibold bg-purple-50 px-2 py-1 rounded-full border border-purple-100">
+                             <Loader2 size={12} className="animate-spin" />
+                             Processing
+                           </span>
+                         )}
+                         {appStatus === 'idle' && (
+                           <span className="flex items-center gap-1.5 text-gray-500 text-xs font-semibold bg-gray-100 px-2 py-1 rounded-full border border-gray-200">
+                             <span className="w-2 h-2 rounded-full bg-gray-400"></span>
+                             Idle
+                           </span>
+                         )}
                       </div>
                     </div>
                  )}
               </div>
-           </div>
 
-           {/* Audio Visualizer / Level */}
-           <div className="bg-gray-50 rounded-lg p-4 border border-gray-100">
-              <div className="flex justify-between items-center mb-2">
-                <span className="text-xs font-semibold text-gray-500">MICROPHONE</span>
-                <span className="text-xs text-gray-400">{Math.round(audioLevel)}%</span>
+              {/* Setup Steps */}
+              <div className="space-y-3 pt-2">
+                 {/* Step 1: Mic Permission */}
+                 {permissionStatus !== 'granted' && (
+                    <div className="space-y-2">
+                       <div className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Setup</div>
+                       {permissionStatus === 'not_requested' && (
+                         <button
+                           onClick={handleRequestMicrophonePermission}
+                           disabled={!isBrowserSupported || isRetryingPermission}
+                           className="w-full py-2.5 px-4 rounded-xl flex items-center gap-3 bg-white border border-gray-200 text-gray-700 hover:border-blue-400 hover:text-blue-600 hover:shadow-md transition-all group text-sm font-medium"
+                         >
+                           <div className="p-1.5 bg-blue-50 rounded-lg group-hover:bg-blue-100 transition-colors">
+                             <Shield size={16} className="text-blue-600" />
+                           </div>
+                           Enable Microphone
+                         </button>
+                       )}
+                       {permissionStatus === 'denied' && (
+                         <button
+                           onClick={retryMicrophonePermission}
+                           className="w-full py-2.5 px-4 rounded-xl flex items-center gap-3 bg-red-50 border border-red-200 text-red-700 hover:bg-red-100 text-sm font-medium"
+                         >
+                           <RefreshCw size={16} /> Retry Permission
+                         </button>
+                       )}
+                    </div>
+                 )}
+
+                 {/* Step 2: Test Connection */}
+                 {permissionStatus === 'granted' && connectionTestStatus !== 'success' && (
+                    <div className="space-y-2">
+                       <div className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Setup</div>
+                       <button
+                         onClick={handleTestConnection}
+                         disabled={isRetryingConnection}
+                         className="w-full py-2.5 px-4 rounded-xl flex items-center gap-3 bg-white border border-gray-200 text-gray-700 hover:border-green-400 hover:text-green-600 hover:shadow-md transition-all group text-sm font-medium"
+                       >
+                         <div className="p-1.5 bg-green-50 rounded-lg group-hover:bg-green-100 transition-colors">
+                            {isRetryingConnection ? <Loader2 size={16} className="animate-spin text-green-600"/> : <Zap size={16} className="text-green-600" />}
+                         </div>
+                         Test Connection
+                         {connectionTestStatus === 'failed' && <span className="text-xs text-red-500 ml-auto">Failed</span>}
+                       </button>
+                       {connectionTestStatus === 'failed' && (
+                         <div className="text-xs text-red-500 bg-red-50 p-2 rounded-lg border border-red-100">
+                           {connectionTestMessage}
+                         </div>
+                       )}
+                    </div>
+                 )}
               </div>
-              <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
-                <div 
-                   className="h-full bg-blue-500 transition-all duration-75"
-                   style={{ width: `${audioLevel}%` }}
-                 />
+
+              {/* Audio Visualizer */}
+              <div className="bg-white rounded-2xl p-4 border border-gray-200 shadow-sm">
+                 <div className="flex justify-between items-center mb-3">
+                   <span className="text-xs font-bold text-gray-400 uppercase tracking-wider">Audio Input</span>
+                   <span className={`text-xs font-mono font-medium ${audioLevel > 5 ? 'text-blue-600' : 'text-gray-400'}`}>
+                     {Math.round(audioLevel)}%
+                   </span>
+                 </div>
+                 <div className="h-2 bg-gray-100 rounded-full overflow-hidden flex items-center">
+                   <div 
+                      className="h-full bg-gradient-to-r from-blue-400 to-indigo-500 transition-all duration-75 ease-out rounded-full"
+                      style={{ width: `${Math.min(100, Math.max(5, audioLevel))}%`, opacity: audioLevel > 1 ? 1 : 0.3 }}
+                    />
+                 </div>
+              </div>
+
+              {/* Volume & Settings */}
+              <div className="space-y-4">
+                 <div className="bg-white rounded-2xl p-4 border border-gray-200 shadow-sm space-y-4">
+                    <div>
+                       <div className="flex justify-between items-center mb-2">
+                          <label className="text-xs font-bold text-gray-400 uppercase tracking-wider">Volume</label>
+                          <span className="text-xs text-gray-500">{Math.round(volume * 100)}%</span>
+                       </div>
+                       <div className="flex items-center gap-3">
+                          <button onClick={() => setVolume(v => v === 0 ? 0.7 : 0)} className="text-gray-500 hover:text-gray-700 transition-colors">
+                            {volume === 0 ? <VolumeX size={18}/> : <Volume2 size={18}/>}
+                          </button>
+                          <input 
+                            type="range" 
+                            min="0" max="1" step="0.05"
+                            value={volume}
+                            onChange={(e) => setVolume(parseFloat(e.target.value))}
+                            className="w-full h-1.5 bg-gray-100 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                          />
+                       </div>
+                    </div>
+                    
+                    <div className="pt-3 border-t border-gray-100">
+                       <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Voice Model</label>
+                       <div className="relative">
+                          <Settings size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                          <select 
+                            value={voice} 
+                            onChange={(e) => setVoice(e.target.value)}
+                            disabled={isConnected}
+                            className="w-full pl-9 pr-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                          >
+                            <option value="Cherry">Cherry (Default)</option>
+                            <option value="Harry">Harry</option>
+                          </select>
+                       </div>
+                    </div>
+                 </div>
               </div>
            </div>
-
-           {/* Volume Control */}
-           <div className="bg-gray-50 rounded-lg p-4 border border-gray-100">
-              <div className="flex items-center gap-3">
-                 <button onClick={() => setVolume(v => v === 0 ? 0.7 : 0)}>
-                   {volume === 0 ? <VolumeX size={18} className="text-gray-400"/> : <Volume2 size={18} className="text-gray-600"/>}
-                 </button>
-                 <input 
-                   type="range" 
-                   min="0" max="1" step="0.05"
-                   value={volume}
-                   onChange={(e) => setVolume(parseFloat(e.target.value))}
-                   className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
-                 />
-              </div>
-           </div>
-
-           {/* Settings (Voice) */}
-           <div className="bg-gray-50 rounded-lg p-4 border border-gray-100">
-              <label className="block text-xs font-semibold text-gray-500 mb-2">VOICE</label>
-              <select 
-                value={voice} 
-                onChange={(e) => setVoice(e.target.value)}
-                disabled={isConnected}
-                className="w-full p-2 bg-white border border-gray-200 rounded-md text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
-              >
-                <option value="Cherry">Cherry (Default)</option>
-                <option value="Harry">Harry</option>
-              </select>
+           
+           {/* Footer Actions */}
+           <div className="p-6 bg-white border-t border-gray-100 shadow-[0_-10px_40px_-15px_rgba(0,0,0,0.05)] z-10">
+              {!isConnected ? (
+                <button
+                  onClick={startSession}
+                  disabled={permissionStatus !== 'granted' || connectionTestStatus !== 'success' || connectionStatus === 'connecting'}
+                  className={`w-full py-4 rounded-2xl flex items-center justify-center gap-3 transition-all transform active:scale-[0.98] ${
+                    permissionStatus === 'granted' && connectionTestStatus === 'success' && connectionStatus !== 'connecting'
+                      ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg shadow-blue-200 hover:shadow-xl hover:shadow-blue-300'
+                      : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                  }`}
+                >
+                  {connectionStatus === 'connecting' ? (
+                    <Loader2 size={24} className="animate-spin" />
+                  ) : (
+                    <Mic size={24} />
+                  )}
+                  <span className="font-bold text-lg">Start Conversation</span>
+                </button>
+              ) : (
+                <button
+                  onClick={stopSession}
+                  className="w-full py-4 rounded-2xl flex items-center justify-center gap-3 bg-white border-2 border-red-100 text-red-500 hover:bg-red-50 hover:border-red-200 shadow-sm hover:shadow-md transition-all transform active:scale-[0.98]"
+                >
+                  <MicOff size={24} />
+                  <span className="font-bold text-lg">End Session</span>
+                </button>
+              )}
            </div>
         </div>
 
-        {/* Right Column: Transcript & Interaction */}
-        <div className="md:col-span-2 flex flex-col h-[500px]">
+        {/* Main Chat Area (Right) */}
+        <div className="flex-1 flex flex-col bg-white/60 relative">
+           {/* Chat Header */}
+           <div className="h-16 border-b border-gray-100 flex items-center justify-between px-6 bg-white/80 backdrop-blur-md sticky top-0 z-10">
+              <div className="flex items-center gap-3">
+                 <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white shadow-md">
+                    <Bot size={18} />
+                 </div>
+                 <div>
+                    <div className="font-bold text-gray-800 text-sm">AI Assistant</div>
+                    <div className="text-xs text-green-600 flex items-center gap-1 font-medium">
+                       <span className="w-1.5 h-1.5 bg-green-500 rounded-full"></span>
+                       Online
+                    </div>
+                 </div>
+              </div>
+              
+              <div className="flex items-center gap-2">
+                 {errorMsg && (
+                   <div className="text-red-600 text-xs bg-red-50 px-3 py-1.5 rounded-full border border-red-100 flex items-center gap-1.5 animate-fade-in">
+                      <AlertCircle size={12} />
+                      {errorMsg}
+                   </div>
+                 )}
+                 <button 
+                   onClick={clearHistory}
+                   className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                   title="Clear History"
+                 >
+                   <Trash2 size={18} />
+                 </button>
+              </div>
+           </div>
            
-           {/* Transcript Area */}
+           {/* Chat Messages */}
            <div 
              ref={transcriptRef}
-             className="flex-1 bg-gray-50 rounded-xl border border-gray-200 p-4 overflow-y-auto space-y-4"
+             className="flex-1 overflow-y-auto p-6 space-y-6 scroll-smooth"
            >
               {conversationHistory.length === 0 && !transcript && (
-                 <div className="h-full flex flex-col items-center justify-center text-gray-400">
-                    <Activity size={48} className="mb-4 opacity-20" />
-                    <p>Start voice chat to see transcription</p>
+                 <div className="h-full flex flex-col items-center justify-center text-gray-300 select-none">
+                    <div className="w-24 h-24 bg-gray-50 rounded-full flex items-center justify-center mb-6">
+                       <MessageSquare size={40} className="text-gray-200" />
+                    </div>
+                    <h3 className="text-gray-900 font-semibold mb-2">Welcome to OmniChat</h3>
+                    <p className="text-sm text-center max-w-xs leading-relaxed">
+                       Start the conversation by connecting your microphone and saying "Hello".
+                    </p>
                  </div>
               )}
 
               {conversationHistory.map((msg, idx) => (
-                <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                   <div className={`max-w-[80%] rounded-2xl px-4 py-2 text-sm ${
-                      msg.role === 'user' 
-                        ? 'bg-blue-600 text-white rounded-tr-none' 
-                        : 'bg-white border border-gray-200 text-gray-800 rounded-tl-none shadow-sm'
-                   }`}>
-                      {msg.text}
+                <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} animate-fade-in`}>
+                   <div className={`flex items-end gap-2 max-w-[85%] ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 shadow-sm ${
+                         msg.role === 'user' 
+                           ? 'bg-blue-600 text-white' 
+                           : 'bg-gradient-to-br from-indigo-500 to-purple-600 text-white'
+                      }`}>
+                         {msg.role === 'user' ? <User size={14} /> : <Bot size={14} />}
+                      </div>
+                      
+                      <div className={`px-5 py-3.5 text-sm leading-relaxed shadow-sm ${
+                         msg.role === 'user' 
+                           ? 'bg-blue-600 text-white rounded-2xl rounded-tr-sm' 
+                           : 'bg-white border border-gray-100 text-gray-800 rounded-2xl rounded-tl-sm'
+                      }`}>
+                         {msg.text}
+                      </div>
                    </div>
                 </div>
               ))}
 
               {/* Current Live Transcript */}
               {transcript && (
-                 <div className="flex justify-start">
-                   <div className="max-w-[80%] bg-white border border-gray-200 text-gray-800 rounded-2xl rounded-tl-none shadow-sm px-4 py-2 text-sm">
-                      <div className="flex items-center gap-2">
-                         <span className="animate-pulse w-1.5 h-1.5 bg-blue-500 rounded-full"></span>
-                         {transcript}
+                 <div className="flex justify-start animate-fade-in">
+                   <div className="flex items-end gap-2 max-w-[85%]">
+                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white shadow-sm flex-shrink-0">
+                         <Bot size={14} />
+                      </div>
+                      <div className="bg-white border border-gray-100 text-gray-800 rounded-2xl rounded-tl-sm px-5 py-3.5 text-sm leading-relaxed shadow-sm">
+                         <div className="flex items-center gap-2">
+                            <div className="flex gap-1 h-3 items-center">
+                              <span className="w-1 h-1 bg-indigo-500 rounded-full animate-bounce [animation-delay:-0.3s]"></span>
+                              <span className="w-1 h-1 bg-indigo-500 rounded-full animate-bounce [animation-delay:-0.15s]"></span>
+                              <span className="w-1 h-1 bg-indigo-500 rounded-full animate-bounce"></span>
+                            </div>
+                            <span className="text-gray-600">{transcript}</span>
+                         </div>
                       </div>
                    </div>
                  </div>
               )}
            </div>
-
-           {/* Actions Footer */}
-           <div className="mt-4 flex justify-between items-center">
-              <button 
-                onClick={clearHistory}
-                className="text-gray-400 hover:text-red-500 flex items-center gap-1 text-sm transition-colors"
-              >
-                <Trash2 size={14} /> Clear History
-              </button>
-
-              {errorMsg && (
-                <div className="text-red-500 text-sm bg-red-50 px-3 py-1 rounded-full border border-red-100 animate-fade-in">
-                   {errorMsg}
-                </div>
-              )}
-           </div>
-
-           {/* Debug Information Panel */}
-           {process.env.NODE_ENV === 'development' && environmentInfo && (
-             <div className="mt-6 bg-gray-800 text-gray-300 rounded-lg p-4 text-xs font-mono">
-               <div className="flex items-center gap-2 mb-2">
-                 <AlertCircle size={14} />
-                 <span className="font-semibold">调试信息</span>
-               </div>
-               <div className="space-y-1">
-                 <div>浏览器: {environmentInfo.secure ? 'HTTPS' : 'HTTP'} ({environmentInfo.hostname})</div>
-                 <div>支持: WebSocket={environmentInfo.webSocketSupported ? '✅' : '❌'}</div>
-                 <div>麦克风权限: {permissionStatus}</div>
-                 <div>连接测试: {connectionTestStatus}</div>
-                 <div>网络状态: {connectionStatus}</div>
-                 {connectionTestMessage && (
-                   <div className="pt-1 border-t border-gray-700">
-                     <div className="text-yellow-300">连接测试: {connectionTestMessage}</div>
-                   </div>
-                 )}
-                 {browserCompatibility && (
-                   <div className="pt-1 border-t border-gray-700">
-                     <div>兼容性: getUserMedia={browserCompatibility.getUserMedia ? '✅' : '❌'}</div>
-                     <div>推荐: {browserCompatibility.recommended ? '✅' : '❌'}</div>
-                     {browserCompatibility.issues.length > 0 && (
-                       <div className="text-yellow-300 mt-1">
-                         问题: {browserCompatibility.issues.join(', ')}
-                       </div>
-                     )}
-                   </div>
-                 )}
+           
+           {/* Visualizer Footer Overlay */}
+           {isConnected && appStatus !== 'idle' && (
+             <div className="absolute bottom-0 left-0 right-0 h-32 bg-gradient-to-t from-white via-white/80 to-transparent pointer-events-none flex items-end justify-center pb-8">
+               <div className="flex items-center gap-1 h-12">
+                  {[...Array(12)].map((_, i) => (
+                    <div 
+                      key={i} 
+                      className={`w-1.5 rounded-full bg-indigo-500 transition-all duration-150 ease-in-out ${
+                        appStatus === 'speaking' ? 'animate-pulse' : ''
+                      }`}
+                      style={{ 
+                        height: appStatus === 'listening' ? `${Math.max(4, audioLevel * Math.random() * 2)}px` : 
+                                appStatus === 'speaking' ? `${10 + Math.random() * 30}px` : '4px',
+                        opacity: 0.6 + (i % 3) * 0.2
+                      }}
+                    />
+                  ))}
                </div>
              </div>
            )}
 
+           {/* Debug Information Panel */}
+           {process.env.NODE_ENV === 'development' && environmentInfo && (
+             <div className="mx-6 mb-6 mt-2 bg-gray-50 border border-gray-200 rounded-xl p-3">
+               <details className="text-xs text-gray-500">
+                 <summary className="cursor-pointer font-semibold flex items-center gap-2 select-none hover:text-indigo-600 transition-colors">
+                   <Activity size={14} /> Debug Information
+                 </summary>
+                 <div className="mt-3 grid grid-cols-2 gap-2 font-mono">
+                   <div>Secure: {environmentInfo.secure ? 'Yes' : 'No'}</div>
+                   <div>WebSocket: {environmentInfo.webSocketSupported ? 'Supported' : 'No'}</div>
+                   <div>Mic Permission: <span className={permissionStatus === 'granted' ? 'text-green-600' : 'text-orange-600'}>{permissionStatus}</span></div>
+                   <div>Connection Test: <span className={connectionTestStatus === 'success' ? 'text-green-600' : 'text-gray-500'}>{connectionTestStatus}</span></div>
+                   <div>App Status: {appStatus}</div>
+                   <div>Latency: {connectionLatency ? `${connectionLatency}ms` : '-'}</div>
+                 </div>
+               </details>
+             </div>
+           )}
         </div>
       </div>
     </div>
   );
-  }
+}
