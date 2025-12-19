@@ -53,7 +53,11 @@ export class AudioPlayer {
       this.gainNode.connect(this.audioContext.destination);
       this.setVolume(this.options.volume || 1.0);
 
-      console.log('Audio player initialized');
+      console.log('Audio player initialized:', {
+        sampleRate: this.audioContext.sampleRate,
+        state: this.audioContext.state,
+        channels: this.options.channels
+      });
     } catch (error) {
       const errorMessage = `Failed to initialize audio player: ${error}`;
       console.error(errorMessage);
@@ -110,10 +114,29 @@ export class AudioPlayer {
       throw new Error('Audio player not initialized');
     }
 
+    if (audioData.length === 0) {
+      console.warn('Empty audio data, skipping');
+      return;
+    }
+
+    // Validate audio data
+    let hasInvalidSamples = false;
+    for (let i = 0; i < audioData.length; i++) {
+      if (isNaN(audioData[i]) || !isFinite(audioData[i])) {
+        hasInvalidSamples = true;
+        audioData[i] = 0; // Replace invalid samples with silence
+      }
+    }
+
+    if (hasInvalidSamples) {
+      console.warn('Invalid audio samples detected and replaced with silence');
+    }
+
+    const targetSampleRate = sampleRate || this.options.sampleRate || APP_CONFIG.AUDIO.SAMPLE_RATE;
     const audioBuffer = this.audioContext.createBuffer(
       this.options.channels || APP_CONFIG.AUDIO.CHANNELS,
       audioData.length,
-      sampleRate || this.options.sampleRate || APP_CONFIG.AUDIO.SAMPLE_RATE
+      targetSampleRate
     );
 
     const channelData = new Float32Array(audioData);

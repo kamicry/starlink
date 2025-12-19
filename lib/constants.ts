@@ -6,11 +6,11 @@ export const APP_CONFIG = {
   
   // Audio configuration
   AUDIO: {
-    SAMPLE_RATE: 16000,
+    SAMPLE_RATE: 24000,
     CHANNELS: 1,
     BIT_DEPTH: 16,
     CHUNK_SIZE: 1024,
-    FORMAT: 'audio/wav'
+    FORMAT: 'audio/pcm'
   },
   
   // WebRTC configuration

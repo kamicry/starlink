@@ -6,6 +6,7 @@ import { QwenOmniClient, QwenOmniCallbacks } from '../lib/qwen-omni-client';
 import { PCMDecoder } from '../lib/audio/pcm-decoder';
 import { AudioPlayer } from '../lib/audio/audio-player';
 import { AudioProcessor } from '../lib/audio/audio-processor';
+import { AudioSmoother } from '../lib/audio/audio-smoother';
 import { requestMicrophonePermission, checkBrowserCompatibility, BrowserCompatibility } from '../lib/audio/microphone-permission';
 import { testQwenConnection, validateApiKey, getEnvironmentInfo } from '../lib/test-connection';
 
@@ -40,6 +41,7 @@ export default function OmniChat() {
   const audioProcessorRef = useRef<AudioProcessor | null>(null);
   const pcmDecoderRef = useRef<PCMDecoder | null>(null);
   const audioPlayerRef = useRef<AudioPlayer | null>(null);
+  const audioSmootherRef = useRef<AudioSmoother | null>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
   
   // 检查浏览器兼容性
@@ -69,6 +71,9 @@ export default function OmniChat() {
           channels: 1,
           bitDepth: 24
         });
+
+        // Initialize Audio Smoother
+        audioSmootherRef.current = new AudioSmoother(5, 24000); // 5ms crossfade
 
         // Initialize Audio Player
         audioPlayerRef.current = new AudioPlayer({
@@ -220,13 +225,61 @@ export default function OmniChat() {
 
   // Process and Queue Audio Logic
   const processAndQueueAudio = useCallback((audioData: ArrayBuffer) => {
-    if (!pcmDecoderRef.current || !audioPlayerRef.current) return;
+    if (!pcmDecoderRef.current || !audioPlayerRef.current || !audioSmootherRef.current) return;
 
     try {
-      const float32Audio = pcmDecoderRef.current.decodePCM(audioData, 24);
-      if (float32Audio.length === 0) return;
+      // Decode PCM24 to Float32
+      let processedAudio = pcmDecoderRef.current.decodePCM(audioData, 24);
+      if (processedAudio.length === 0) return;
 
-      audioPlayerRef.current.enqueueFloat32Chunk(float32Audio, 24000);
+      // Calculate audio statistics for debugging (only log occasionally)
+      if (Math.random() < 0.05) { // Log 5% of chunks
+        let min = Infinity, max = -Infinity, sum = 0, sumAbs = 0;
+        for (let i = 0; i < processedAudio.length; i++) {
+          const sample = processedAudio[i];
+          if (sample < min) min = sample;
+          if (sample > max) max = sample;
+          sum += sample;
+          sumAbs += Math.abs(sample);
+        }
+        console.log('Audio chunk stats (before processing):', {
+          samples: processedAudio.length,
+          min: min.toFixed(3),
+          max: max.toFixed(3),
+          mean: (sum / processedAudio.length).toFixed(3),
+          rms: Math.sqrt(sumAbs / processedAudio.length).toFixed(3)
+        });
+      }
+
+      // Apply DC offset removal
+      processedAudio = audioSmootherRef.current.removeDCOffset(processedAudio);
+
+      // Apply smoothing and crossfade
+      processedAudio = audioSmootherRef.current.smooth(processedAudio);
+
+      // Apply soft limiting to prevent clipping
+      const limitedAudio = new Float32Array(processedAudio.length);
+      let clippedCount = 0;
+      for (let i = 0; i < processedAudio.length; i++) {
+        const sample = processedAudio[i];
+        // Hard limit at ±0.95 to prevent distortion
+        if (sample > 0.95) {
+          limitedAudio[i] = 0.95;
+          clippedCount++;
+        } else if (sample < -0.95) {
+          limitedAudio[i] = -0.95;
+          clippedCount++;
+        } else {
+          limitedAudio[i] = sample;
+        }
+      }
+
+      if (clippedCount > 0) {
+        console.warn(`Clipped ${clippedCount} samples out of ${processedAudio.length}`);
+      }
+
+      // Enqueue for playback at 24kHz
+      audioPlayerRef.current.enqueueFloat32Chunk(limitedAudio, 24000);
     } catch (error) {
       console.error('Error processing audio data:', error);
     }
@@ -378,6 +431,7 @@ export default function OmniChat() {
 
     audioPlayerRef.current?.stop();
     audioPlayerRef.current?.clearQueue();
+    audioSmootherRef.current?.reset(); // Reset audio smoother state
     setTranscript('');
     setAppStatus('idle');
 

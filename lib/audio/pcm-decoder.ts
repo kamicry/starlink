@@ -23,7 +23,7 @@ export class PCMDecoder {
     this.options = {
       sampleRate: options.sampleRate || APP_CONFIG.AUDIO.SAMPLE_RATE,
       channels: options.channels || APP_CONFIG.AUDIO.CHANNELS,
-      bitDepth: options.bitDepth || 24, // Default to 24-bit for high quality
+      bitDepth: options.bitDepth || 16, // Default to 24-bit for high quality 12.19 default16bit
     };
   }
 
@@ -34,6 +34,10 @@ export class PCMDecoder {
     if (!this.audioContext || this.audioContext.state === 'closed') {
       this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
         sampleRate: this.options.sampleRate
+      });
+      console.log('PCM Decoder AudioContext initialized:', {
+        sampleRate: this.audioContext.sampleRate,
+        state: this.audioContext.state
       });
     }
     return this.audioContext;
@@ -51,24 +55,29 @@ export class PCMDecoder {
     for (let i = 0; i < sampleCount; i++) {
       const byteOffset = i * 3;
       
-      // Read 24-bit signed integer
-      let sample = 0;
-      
-      // Little endian: read bytes in reverse order
+      // Read 24-bit signed integer (little endian)
       const byte1 = dataView.getUint8(byteOffset);
       const byte2 = dataView.getUint8(byteOffset + 1);
       const byte3 = dataView.getUint8(byteOffset + 2);
       
-      // Combine bytes to form 24-bit value
-      sample = (byte3 << 16) | (byte2 << 8) | byte1;
+      // Combine bytes to form 24-bit value (little endian)
+      let sample = (byte1) | (byte2 << 8) | (byte3 << 16);
       
-      // Sign extend if necessary
+      // Sign extend from 24-bit to 32-bit
       if (sample & 0x800000) {
-        sample = sample | 0xFF000000;
+        sample |= 0xFF000000;
       }
       
-      // Convert to Float32 (-1 to 1 range)
-      float32Array[i] = sample / 8388608; // 2^23
+      // Convert to signed 32-bit integer first
+      sample = sample | 0; // Force to signed 32-bit
+      
+      // Convert to Float32 (-1.0 to 1.0 range)
+      // Use 8388608.0 (2^23) for proper float division
+      float32Array[i] = sample / 8388608.0;
+      
+      // Clamp to prevent any overflow
+      if (float32Array[i] > 1.0) float32Array[i] = 1.0;
+      if (float32Array[i] < -1.0) float32Array[i] = -1.0;
     }
 
     return float32Array;
