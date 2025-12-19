@@ -721,21 +721,13 @@ export default function OmniChat() {
            </div>
         </div>
 
-        {/* Right Column: Live2D + Transcript & Interaction */}
+        {/* Right Column: Transcript & Interaction */}
         <div className="md:col-span-2 flex flex-col gap-4">
 
-           {/* Live2D Area - Top */}
-           <div className="bg-gradient-to-b from-gray-100 to-gray-50 rounded-xl border border-gray-200 h-[250px] flex items-center justify-center overflow-hidden">
-             <div className="text-gray-400 text-center">
-               <p className="text-sm font-semibold">Live2D Model Area</p>
-               <p className="text-xs mt-1">(Drag model here or integrate)</p>
-             </div>
-           </div>
-
-           {/* Transcript Area - Bottom */}
-           <div 
+           {/* Transcript Area */}
+           <div
              ref={transcriptRef}
-             className="h-[250px] bg-gray-50 rounded-xl border border-gray-200 p-4 overflow-y-auto space-y-4"
+             className="h-[350px] md:h-[520px] bg-gray-50 rounded-xl border border-gray-200 p-4 overflow-y-auto space-y-4"
            >
               {conversationHistory.length === 0 && !transcript && (
                  <div className="h-full flex flex-col items-center justify-center text-gray-400">
