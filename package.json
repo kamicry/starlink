@@ -16,7 +16,11 @@
     "lucide-react": "^0.263.1",
     "clsx": "^2.0.0",
     "ws": "^8.14.0",
-    "dotenv": "^16.3.0"
+    "dotenv": "^16.3.0",
+
+    "pixi.js": "^6.5.10",
+    "@pixi/display": "^6.5.10",
+    "pixi-live2d-display": "^0.4.0"
   },
   
     
