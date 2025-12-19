@@ -219,7 +219,7 @@ export class QwenOmniClient {
         modalities: config.modalities || ['text', 'audio'],
         voice: config.voice || 'Cherry',
         input_audio_format: config.input_audio_format || 'pcm16',
-        output_audio_format: config.output_audio_format || 'pcm24',
+        output_audio_format: config.output_audio_format || 'pcm16',
         instructions: config.instructions || '你是一个友好的 AI 助手，请自然地进行对话。',
         input_audio_transcription: config.input_audio_transcription,
         turn_detection: config.turn_detection ?? null
