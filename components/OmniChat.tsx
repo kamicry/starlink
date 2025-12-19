@@ -465,49 +465,106 @@ export default function OmniChat() {
   }, []);
 
   return (
-    <div className="w-full h-full flex flex-col">
-      {/* Main Content Area - Flex Row Layout */}
-      <div className="flex-1 flex overflow-hidden">
+    <div className="w-full max-w-4xl mx-auto p-4 md:p-6 bg-white rounded-xl shadow-lg">
+      {/* Header */}
+      <header className="flex justify-between items-center mb-8 border-b pb-4">
+        <div>
+           <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
+             <Activity className="text-blue-600" />
+             OmniChat
+           </h1>
+           <p className="text-gray-500 text-sm mt-1">Real-time Voice Interaction</p>
+        </div>
         
-        {/* Left Column: Controls - Fixed Width, Vertical Layout */}
-        <div className="w-24 flex-shrink-0 bg-gray-900 border-r border-gray-700 p-3 overflow-y-auto flex flex-col gap-3">
+        {/* Connection Indicator */}
+        <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 rounded-full border">
+          {connectionStatus === 'connecting' ? (
+             <Loader2 className="animate-spin text-orange-500" size={16} />
+          ) : isConnected ? (
+             <Wifi className="text-green-500" size={16} />
+          ) : (
+             <WifiOff className="text-gray-400" size={16} />
+          )}
+          <span className={`text-sm font-medium ${
+            isConnected ? 'text-green-600' : 
+            connectionStatus === 'connecting' ? 'text-orange-600' :
+            connectionStatus === 'error' ? 'text-red-600' : 'text-gray-500'
+          }`}>
+            {connectionStatus === 'connected' ? 'Connected' : 
+             connectionStatus === 'connecting' ? 'Connecting...' : 
+             connectionStatus === 'error' ? 'Error' : 'Disconnected'}
+          </span>
+        </div>
+      </header>
+
+      {/* Main Content Area */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        
+        {/* Left Column: Controls */}
+        <div className="md:col-span-1 space-y-6">
            
+           {/* Browser Compatibility Warning */}
+           {browserCompatibility && !browserCompatibility.recommended && (
+             <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+               <div className="flex items-start gap-2">
+                 <AlertCircle className="text-red-500 flex-shrink-0 mt-0.5" size={16} />
+                 <div className="text-sm">
+                   <div className="font-medium text-red-800 mb-1">浏览器兼容性警告</div>
+                   <ul className="text-red-700 text-xs space-y-1">
+                     {browserCompatibility.issues.map((issue, idx) => (
+                       <li key={idx}>• {issue}</li>
+                     ))}
+                   </ul>
+                 </div>
+               </div>
+             </div>
+           )}
+
            {/* Permission & Connection Status Panel */}
-           <div className="bg-gray-800 rounded-lg p-2 border border-gray-700 flex-shrink-0">
-              <div className="flex flex-col gap-2 items-center">
+           <div className="bg-gray-50 rounded-lg p-4 border border-gray-100">
+              <div className="flex flex-col gap-4">
                  
-                 {/* Step 1: Request Microphone Permission - Icon Button */}
+                 {/* Step 1: Request Microphone Permission */}
                  {permissionStatus === 'not_requested' && (
                    <button
                      onClick={handleRequestMicrophonePermission}
                      disabled={!isBrowserSupported || isRetryingPermission}
-                     title="Request Microphone Permission"
-                     className={`p-2 rounded-lg flex items-center justify-center transition-all ${
+                     className={`w-full py-3 rounded-xl flex flex-col items-center justify-center gap-2 transition-all ${
                        !isBrowserSupported 
-                         ? 'bg-gray-600 text-gray-500 cursor-not-allowed'
-                         : 'bg-blue-600 hover:bg-blue-700 text-white'
+                         ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                         : 'bg-blue-600 hover:bg-blue-700 text-white shadow-md hover:shadow-lg'
                      }`}
                    >
-                     <Shield size={16} />
+                     <Shield size={20} />
+                     <span className="font-medium text-sm">请求麦克风权限</span>
                    </button>
                  )}
 
                  {permissionStatus === 'requesting' && (
-                   <div className="p-2 rounded-lg flex items-center justify-center bg-blue-600 text-white">
-                     <Loader2 className="animate-spin" size={16} />
+                   <div className="w-full py-3 rounded-xl flex flex-col items-center justify-center gap-2 bg-blue-100 text-blue-700">
+                     <Loader2 className="animate-spin" size={20} />
+                     <span className="font-medium text-sm">正在请求权限...</span>
                    </div>
                  )}
 
                  {(permissionStatus === 'granted' || permissionStatus === 'error' || permissionStatus === 'denied') && (
-                   <div className={`p-2 rounded-lg flex items-center justify-center ${
+                   <div className={`w-full py-3 rounded-xl flex items-center justify-center gap-2 ${
                      permissionStatus === 'granted' 
-                       ? 'bg-green-600 text-white' 
-                       : 'bg-red-600 text-white'
+                       ? 'bg-green-100 text-green-700' 
+                       : 'bg-red-100 text-red-700'
                    }`}>
                      {permissionStatus === 'granted' ? (
-                       <ShieldCheck size={16} />
+                       <>
+                         <ShieldCheck size={18} />
+                         <span className="font-medium text-sm">✅ 麦克风已就绪</span>
+                       </>
                      ) : (
-                       <AlertCircle size={16} />
+                       <>
+                         <AlertCircle size={18} />
+                         <span className="font-medium text-sm">
+                           {permissionStatus === 'denied' ? '❌ 麦克风权限被拒绝' : '❌ 权限请求失败'}
+                         </span>
+                       </>
                      )}
                    </div>
                  )}
@@ -517,33 +574,47 @@ export default function OmniChat() {
                    <button
                      onClick={handleTestConnection}
                      disabled={isRetryingConnection}
-                     title="Test API Connection"
-                     className="p-2 rounded-lg flex items-center justify-center bg-green-600 hover:bg-green-700 text-white transition-all"
+                     className="w-full py-3 rounded-xl flex flex-col items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white shadow-md hover:shadow-lg transition-all"
                    >
-                     <Wifi size={16} />
+                     <Wifi size={20} />
+                     <span className="font-medium text-sm">测试 API 连接</span>
                    </button>
                  )}
 
                  {connectionTestStatus === 'testing' && (
-                   <div className="p-2 rounded-lg flex items-center justify-center bg-green-600 text-white">
-                     <Loader2 className="animate-spin" size={16} />
+                   <div className="w-full py-3 rounded-xl flex flex-col items-center justify-center gap-2 bg-green-100 text-green-700">
+                     <Loader2 className="animate-spin" size={20} />
+                     <span className="font-medium text-sm">🔄 测试连接中...</span>
                    </div>
                  )}
 
                  {connectionTestStatus === 'success' && (
-                   <div className="p-2 rounded-lg flex items-center justify-center bg-green-600 text-white">
-                     <Wifi size={16} />
+                   <div className="w-full py-3 rounded-xl flex flex-col items-center justify-center gap-1 bg-green-100 text-green-700">
+                     <div className="flex items-center gap-2">
+                       <Wifi className="text-green-600" size={18} />
+                       <span className="font-medium text-sm">✅ API 连接正常</span>
+                     </div>
+                     {connectionLatency && (
+                       <span className="text-xs text-green-600">延迟: {connectionLatency}ms</span>
+                     )}
                    </div>
                  )}
 
+                 {(connectionTestStatus === 'failed' || connectionTestStatus === 'not_tested') && permissionStatus !== 'granted' && (
+                   <div className="text-center py-2 text-xs text-gray-500">
+                     {connectionTestStatus === 'failed' ? connectionTestMessage : '请先完成麦克风权限设置'}
+                   </div>
+                 )}
+
+                 {/* Connection Test Failed - Show Retry */}
                  {connectionTestStatus === 'failed' && (
                    <button
                      onClick={retryConnection}
                      disabled={isRetryingConnection}
-                     title="Retry Connection"
-                     className="p-2 rounded-lg flex items-center justify-center bg-red-600 hover:bg-red-700 text-white transition-all"
+                     className="w-full py-2 rounded-lg flex items-center justify-center gap-2 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 transition-all"
                    >
                      <RefreshCw size={16} className={isRetryingConnection ? 'animate-spin' : ''} />
+                     <span className="font-medium text-sm">重试连接</span>
                    </button>
                  )}
 
@@ -552,10 +623,10 @@ export default function OmniChat() {
                    <button
                      onClick={retryMicrophonePermission}
                      disabled={isRetryingPermission}
-                     title="Retry Permission"
-                     className="p-2 rounded-lg flex items-center justify-center bg-red-600 hover:bg-red-700 text-white transition-all"
+                     className="w-full py-2 rounded-lg flex items-center justify-center gap-2 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 transition-all"
                    >
                      <RefreshCw size={16} className={isRetryingPermission ? 'animate-spin' : ''} />
+                     <span className="font-medium text-sm">重新请求权限</span>
                    </button>
                  )}
 
@@ -564,14 +635,14 @@ export default function OmniChat() {
                    <button
                      onClick={startSession}
                      disabled={connectionStatus === 'connecting'}
-                     title="Start Voice Chat"
-                     className={`p-2 rounded-lg flex items-center justify-center transition-all ${
+                     className={`w-full py-4 rounded-xl flex flex-col items-center justify-center gap-2 transition-all ${
                        connectionStatus === 'connecting' 
-                         ? 'bg-gray-600 text-gray-500 cursor-not-allowed'
-                         : 'bg-blue-600 hover:bg-blue-700 text-white'
+                         ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                         : 'bg-blue-600 hover:bg-blue-700 text-white shadow-md hover:shadow-lg'
                      }`}
                    >
-                     <Mic size={16} />
+                     <Mic size={24} />
+                     <span className="font-semibold">开始语音</span>
                    </button>
                  )}
 
@@ -579,80 +650,89 @@ export default function OmniChat() {
                  {isConnected && (
                    <button
                      onClick={stopSession}
-                     title="Stop Voice Chat"
-                     className="p-2 rounded-lg flex items-center justify-center bg-red-600 hover:bg-red-700 text-white transition-all"
+                     className="w-full py-4 rounded-xl flex flex-col items-center justify-center gap-2 bg-red-500 hover:bg-red-600 text-white shadow-md hover:shadow-lg transition-all"
                    >
-                     <MicOff size={16} />
+                     <MicOff size={24} />
+                     <span className="font-semibold">停止语音</span>
                    </button>
                  )}
 
-                 {/* Divider */}
-                 <div className="w-full h-px bg-gray-700 my-1"></div>
-
-                 {/* Volume Control - Icon Button */}
-                 <button 
-                   onClick={() => setVolume(v => v === 0 ? 0.7 : 0)}
-                   title="Mute/Unmute"
-                   className="p-2 rounded-lg flex items-center justify-center bg-gray-700 hover:bg-gray-600 text-gray-300 transition-all"
-                 >
-                   {volume === 0 ? <VolumeX size={16} /> : <Volume2 size={16} />}
-                 </button>
-
-                 {/* Settings (Voice) - Dropdown */}
-                 <select 
-                   value={voice} 
-                   onChange={(e) => setVoice(e.target.value)}
-                   disabled={isConnected}
-                   title="Select Voice"
-                   className="w-full p-1.5 bg-gray-700 border border-gray-600 rounded text-xs text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 cursor-pointer"
-                 >
-                   <option value="Cherry">Cherry</option>
-                   <option value="Harry">Harry</option>
-                 </select>
+                 {/* Status Detail */}
+                 {isConnected && (
+                    <div className="text-center py-2 bg-white rounded-lg border border-gray-100">
+                      <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">状态</div>
+                      <div className="font-medium text-blue-600 capitalize flex items-center justify-center gap-2">
+                        {appStatus === 'listening' && <span className="relative flex h-3 w-3"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span><span className="relative inline-flex rounded-full h-3 w-3 bg-red-500"></span></span>}
+                        {appStatus === 'speaking' && <Play size={14} className="animate-pulse" />}
+                        {appStatus === 'processing' && <Loader2 size={14} className="animate-spin" />}
+                        {appStatus === 'idle' && <span className="w-3 h-3 rounded-full bg-gray-400"></span>}
+                        {appStatus === 'listening' && '监听中'}
+                        {appStatus === 'speaking' && '播放中'}
+                        {appStatus === 'processing' && '处理中'}
+                        {appStatus === 'idle' && '空闲'}
+                      </div>
+                    </div>
+                 )}
               </div>
+           </div>
+
+           {/* Audio Visualizer / Level */}
+           <div className="bg-gray-50 rounded-lg p-4 border border-gray-100">
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-xs font-semibold text-gray-500">MICROPHONE</span>
+                <span className="text-xs text-gray-400">{Math.round(audioLevel)}%</span>
+              </div>
+              <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                <div 
+                   className="h-full bg-blue-500 transition-all duration-75"
+                   style={{ width: `${audioLevel}%` }}
+                 />
+              </div>
+           </div>
+
+           {/* Volume Control */}
+           <div className="bg-gray-50 rounded-lg p-4 border border-gray-100">
+              <div className="flex items-center gap-3">
+                 <button onClick={() => setVolume(v => v === 0 ? 0.7 : 0)}>
+                   {volume === 0 ? <VolumeX size={18} className="text-gray-400"/> : <Volume2 size={18} className="text-gray-600"/>}
+                 </button>
+                 <input 
+                   type="range" 
+                   min="0" max="1" step="0.05"
+                   value={volume}
+                   onChange={(e) => setVolume(parseFloat(e.target.value))}
+                   className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                 />
+              </div>
+           </div>
+
+           {/* Settings (Voice) */}
+           <div className="bg-gray-50 rounded-lg p-4 border border-gray-100">
+              <label className="block text-xs font-semibold text-gray-500 mb-2">VOICE</label>
+              <select 
+                value={voice} 
+                onChange={(e) => setVoice(e.target.value)}
+                disabled={isConnected}
+                className="w-full p-2 bg-white border border-gray-200 rounded-md text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
+              >
+                <option value="Cherry">Cherry (Default)</option>
+                <option value="Harry">Harry</option>
+              </select>
            </div>
         </div>
 
         {/* Right Column: Transcript & Interaction */}
-        <div className="flex-1 flex flex-col bg-gray-950 border-r border-gray-700 overflow-hidden">
+        <div className="md:col-span-2 flex flex-col h-[500px]">
            
-           {/* Header */}
-           <div className="bg-gray-900 border-b border-gray-700 px-4 py-3 flex-shrink-0">
-              <div className="flex justify-between items-center">
-                <div className="text-white font-semibold text-sm flex items-center gap-2">
-                  <Activity size={16} className="text-blue-400" />
-                  OmniChat
-                </div>
-                <div className="flex items-center gap-2">
-                  {connectionStatus === 'connecting' ? (
-                     <Loader2 className="animate-spin text-orange-400" size={14} />
-                  ) : isConnected ? (
-                     <Wifi className="text-green-400" size={14} />
-                  ) : (
-                     <WifiOff className="text-gray-500" size={14} />
-                  )}
-                  <span className={`text-xs font-medium ${
-                    isConnected ? 'text-green-400' : 
-                    connectionStatus === 'connecting' ? 'text-orange-400' :
-                    connectionStatus === 'error' ? 'text-red-400' : 'text-gray-400'
-                  }`}>
-                    {connectionStatus === 'connected' ? 'Connected' : 
-                     connectionStatus === 'connecting' ? 'Connecting' : 
-                     connectionStatus === 'error' ? 'Error' : 'Disconnected'}
-                  </span>
-                </div>
-              </div>
-           </div>
-
            {/* Transcript Area */}
            <div 
              ref={transcriptRef}
-             className="flex-1 overflow-y-auto p-4 space-y-4"
+             className="flex-1 bg-gray-50 rounded-xl border border-gray-200 p-4 overflow-y-auto space-y-4"
            >
               {conversationHistory.length === 0 && !transcript && (
-                 <div className="h-full flex flex-col items-center justify-center text-gray-500">
-                    <Activity size={32} className="mb-2 opacity-40" />
-                    <p className="text-xs">Start voice chat to see transcription</p>
+                 <div className="h-full flex flex-col items-center justify-center text-gray-400">
+                    <Activity size={48} className="mb-4 opacity-20" />
+                    <p>Start voice chat to see transcription</p>
                  </div>
               )}
 
@@ -661,7 +741,7 @@ export default function OmniChat() {
                    <div className={`max-w-[80%] rounded-2xl px-4 py-2 text-sm ${
                       msg.role === 'user' 
                         ? 'bg-blue-600 text-white rounded-tr-none' 
-                        : 'bg-gray-800 border border-gray-700 text-gray-100 rounded-tl-none'
+                        : 'bg-white border border-gray-200 text-gray-800 rounded-tl-none shadow-sm'
                    }`}>
                       {msg.text}
                    </div>
@@ -671,7 +751,7 @@ export default function OmniChat() {
               {/* Current Live Transcript */}
               {transcript && (
                  <div className="flex justify-start">
-                   <div className="max-w-[80%] bg-gray-800 border border-gray-700 text-gray-100 rounded-2xl rounded-tl-none px-4 py-2 text-sm">
+                   <div className="max-w-[80%] bg-white border border-gray-200 text-gray-800 rounded-2xl rounded-tl-none shadow-sm px-4 py-2 text-sm">
                       <div className="flex items-center gap-2">
                          <span className="animate-pulse w-1.5 h-1.5 bg-blue-500 rounded-full"></span>
                          {transcript}
@@ -681,50 +761,57 @@ export default function OmniChat() {
               )}
            </div>
 
-           {/* Status and Actions Footer */}
-           <div className="bg-gray-900 border-t border-gray-700 px-4 py-3 flex-shrink-0 flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                 {isConnected && (
-                    <div className="flex items-center gap-2">
-                      <div className="text-xs text-gray-400">
-                        {appStatus === 'listening' && <span className="flex items-center gap-1"><span className="relative flex h-2 w-2"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span><span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span></span>Listening</span>}
-                        {appStatus === 'speaking' && <span className="flex items-center gap-1"><Play size={12} className="animate-pulse" />Speaking</span>}
-                        {appStatus === 'processing' && <span className="flex items-center gap-1"><Loader2 size={12} className="animate-spin" />Processing</span>}
-                      </div>
-                      <div className="w-px h-4 bg-gray-700"></div>
-                    </div>
-                 )}
-              </div>
-
+           {/* Actions Footer */}
+           <div className="mt-4 flex justify-between items-center">
               <button 
                 onClick={clearHistory}
-                className="text-gray-400 hover:text-gray-200 flex items-center gap-1 text-xs transition-colors"
-                title="Clear History"
+                className="text-gray-400 hover:text-red-500 flex items-center gap-1 text-sm transition-colors"
               >
-                <Trash2 size={12} />
+                <Trash2 size={14} /> Clear History
               </button>
 
               {errorMsg && (
-                <div className="text-red-400 text-xs bg-red-950/30 px-2 py-1 rounded border border-red-900/50 flex-1">
+                <div className="text-red-500 text-sm bg-red-50 px-3 py-1 rounded-full border border-red-100 animate-fade-in">
                    {errorMsg}
                 </div>
               )}
            </div>
+
+           {/* Debug Information Panel */}
+           {process.env.NODE_ENV === 'development' && environmentInfo && (
+             <div className="mt-6 bg-gray-800 text-gray-300 rounded-lg p-4 text-xs font-mono">
+               <div className="flex items-center gap-2 mb-2">
+                 <AlertCircle size={14} />
+                 <span className="font-semibold">调试信息</span>
+               </div>
+               <div className="space-y-1">
+                 <div>浏览器: {environmentInfo.secure ? 'HTTPS' : 'HTTP'} ({environmentInfo.hostname})</div>
+                 <div>支持: WebSocket={environmentInfo.webSocketSupported ? '✅' : '❌'}</div>
+                 <div>麦克风权限: {permissionStatus}</div>
+                 <div>连接测试: {connectionTestStatus}</div>
+                 <div>网络状态: {connectionStatus}</div>
+                 {connectionTestMessage && (
+                   <div className="pt-1 border-t border-gray-700">
+                     <div className="text-yellow-300">连接测试: {connectionTestMessage}</div>
+                   </div>
+                 )}
+                 {browserCompatibility && (
+                   <div className="pt-1 border-t border-gray-700">
+                     <div>兼容性: getUserMedia={browserCompatibility.getUserMedia ? '✅' : '❌'}</div>
+                     <div>推荐: {browserCompatibility.recommended ? '✅' : '❌'}</div>
+                     {browserCompatibility.issues.length > 0 && (
+                       <div className="text-yellow-300 mt-1">
+                         问题: {browserCompatibility.issues.join(', ')}
+                       </div>
+                     )}
+                   </div>
+                 )}
+               </div>
+             </div>
+           )}
+
         </div>
       </div>
-
-      {/* Debug Information Panel - Only in development */}
-      {process.env.NODE_ENV === 'development' && environmentInfo && (
-        <div className="bg-gray-800 text-gray-300 border-t border-gray-700 px-4 py-2 text-xs font-mono flex-shrink-0 overflow-y-auto max-h-20">
-          <div className="space-y-0.5">
-            <div>🔗 {environmentInfo.secure ? 'HTTPS' : 'HTTP'} | Perms: {permissionStatus} | API: {connectionTestStatus} | Net: {connectionStatus}</div>
-            {connectionTestMessage && <div className="text-yellow-300">📡 {connectionTestMessage}</div>}
-            {browserCompatibility && !browserCompatibility.recommended && (
-              <div className="text-yellow-300">⚠️ {browserCompatibility.issues.join(', ')}</div>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
   }
