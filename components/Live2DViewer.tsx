@@ -8,6 +8,24 @@ import React, {
 } from 'react';
 import clsx from 'clsx';
 
+export type Live2DLoadStage =
+  | 'starting'
+  | 'pixi'
+  | 'cubismCore'
+  | 'runtime'
+  | 'settings'
+  | 'moc'
+  | 'pose'
+  | 'physics'
+  | 'textures'
+  | 'ready';
+
+export type Live2DLoadProgress = {
+  path: string;
+  progress: number; // 0-100
+  stage: Live2DLoadStage;
+};
+
 export type Live2DViewerHandle = {
   loadModel: (path: string) => Promise<void>;
   playAction: (actionName: string) => void;
@@ -18,17 +36,39 @@ export type Live2DViewerHandle = {
 export type Live2DViewerProps = {
   modelPath: string;
   onAction?: (actionName: string) => void;
+  onLoadStart?: (path: string) => void;
+  onLoadProgress?: (progress: Live2DLoadProgress) => void;
+  onLoadComplete?: (path: string) => void;
+  onLoadError?: (path: string, error: Error) => void;
   className?: string;
   style?: React.CSSProperties;
 };
 
 type PixiApp = any;
+
 type Live2DModelInstance = any;
 
 const CLICK_FLASH_MS = 120;
 
+function toError(err: unknown): Error {
+  if (err instanceof Error) return err;
+  return new Error(typeof err === 'string' ? err : 'Unknown error');
+}
+
 export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
-  function Live2DViewer({ modelPath, onAction, className, style }, ref) {
+  function Live2DViewer(
+    {
+      modelPath,
+      onAction,
+      onLoadStart,
+      onLoadProgress,
+      onLoadComplete,
+      onLoadError,
+      className,
+      style,
+    },
+    ref
+  ) {
     const containerRef = useRef<HTMLDivElement | null>(null);
 
     const appRef = useRef<PixiApp | null>(null);
@@ -58,7 +98,8 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
 
       const padding = 24;
 
-      const bounds = model.getLocalBounds?.() ?? { x: 0, y: 0, width: model.width, height: model.height };
+      const bounds =
+        model.getLocalBounds?.() ?? { x: 0, y: 0, width: model.width, height: model.height };
       const contentWidth = Math.max(1, bounds.width);
       const contentHeight = Math.max(1, bounds.height);
 
@@ -234,62 +275,117 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
         disposedRef.current = false;
         const token = ++loadTokenRef.current;
 
-        await ensurePixiApp();
-        if (disposedRef.current || token !== loadTokenRef.current) return;
-
-        const app = appRef.current;
-        if (!app) return;
-
-        destroyCurrentModel();
-
-        const PIXI = pixiRef.current ?? (await import('pixi.js'));
-        pixiRef.current = PIXI;
-
-        if (typeof window !== 'undefined') {
-          (window as any).PIXI = PIXI;
-        }
-
-        await ensureCubismCore();
-        if (typeof window !== 'undefined' && !(window as any).Live2DCubismCore) {
-          throw new Error('Cubism Core is not available on window.Live2DCubismCore');
-        }
-
-        const live2d = await import('pixi-live2d-display/cubism4');
-        const Live2DModel = (live2d as any).Live2DModel ?? (live2d as any).default?.Live2DModel;
-        if (!Live2DModel) {
-          throw new Error('pixi-live2d-display: Live2DModel export not found');
-        }
-
-        const model = (await Live2DModel.from(path, {
-          autoInteract: false,
-          autoUpdate: false,
-        })) as Live2DModelInstance;
-
-        if (disposedRef.current || token !== loadTokenRef.current) {
-          model.destroy?.({ children: true, texture: true, baseTexture: true });
-          return;
-        }
-
-        modelRef.current = model;
-        app.stage.addChild(model);
-
-        model.interactive = true;
-        model.buttonMode = true;
-        model.cursor = 'pointer';
-
-        model.on?.('pointertap', () => {
-          flashClick();
-          playRandomAction();
-        });
-
-        tickerFnRef.current = () => {
-          model.update?.(app.ticker.deltaMS);
+        const notifyProgress = (progress: number, stage: Live2DLoadStage) => {
+          onLoadProgress?.({
+            path,
+            progress: Math.max(0, Math.min(100, Math.round(progress))),
+            stage,
+          });
         };
-        app.ticker.add(tickerFnRef.current);
 
-        fitModelToView();
+        try {
+          onLoadStart?.(path);
+          notifyProgress(0, 'starting');
+
+          await ensurePixiApp();
+          if (disposedRef.current || token !== loadTokenRef.current) return;
+          notifyProgress(5, 'pixi');
+
+          const app = appRef.current;
+          if (!app) return;
+
+          destroyCurrentModel();
+
+          const PIXI = pixiRef.current ?? (await import('pixi.js'));
+          pixiRef.current = PIXI;
+
+          if (typeof window !== 'undefined') {
+            (window as any).PIXI = PIXI;
+          }
+
+          await ensureCubismCore();
+          if (disposedRef.current || token !== loadTokenRef.current) return;
+          notifyProgress(10, 'cubismCore');
+
+          if (typeof window !== 'undefined' && !(window as any).Live2DCubismCore) {
+            throw new Error('Cubism Core is not available on window.Live2DCubismCore');
+          }
+
+          const live2d = await import('pixi-live2d-display/cubism4');
+          notifyProgress(15, 'runtime');
+
+          const Live2DModel = (live2d as any).Live2DModel ?? (live2d as any).default?.Live2DModel;
+          if (!Live2DModel) {
+            throw new Error('pixi-live2d-display: Live2DModel export not found');
+          }
+
+          let resolveLoaded: (() => void) | null = null;
+          let rejectLoaded: ((e: any) => void) | null = null;
+
+          const loadedPromise = new Promise<void>((resolve, reject) => {
+            resolveLoaded = resolve;
+            rejectLoaded = reject;
+          });
+
+          const model = Live2DModel.fromSync(path, {
+            autoInteract: false,
+            autoUpdate: false,
+            onLoad: () => resolveLoaded?.(),
+            onError: (e: any) => rejectLoaded?.(e),
+          }) as Live2DModelInstance;
+
+          model.once?.('settingsJSONLoaded', () => notifyProgress(25, 'settings'));
+          model.once?.('modelLoaded', () => notifyProgress(55, 'moc'));
+          model.once?.('poseLoaded', () => notifyProgress(65, 'pose'));
+          model.once?.('physicsLoaded', () => notifyProgress(70, 'physics'));
+          model.once?.('textureLoaded', () => notifyProgress(95, 'textures'));
+
+          await loadedPromise;
+
+          if (disposedRef.current || token !== loadTokenRef.current) {
+            model.destroy?.({ children: true, texture: true, baseTexture: true });
+            return;
+          }
+
+          modelRef.current = model;
+          app.stage.addChild(model);
+
+          model.interactive = true;
+          model.buttonMode = true;
+          model.cursor = 'pointer';
+
+          model.on?.('pointertap', () => {
+            flashClick();
+            playRandomAction();
+          });
+
+          tickerFnRef.current = () => {
+            model.update?.(app.ticker.deltaMS);
+          };
+          app.ticker.add(tickerFnRef.current);
+
+          fitModelToView();
+
+          notifyProgress(100, 'ready');
+          onLoadComplete?.(path);
+        } catch (err) {
+          const error = toError(err);
+          onLoadError?.(path, error);
+          throw error;
+        }
       },
-      [destroyCurrentModel, ensurePixiApp, ensureCubismCore, fitModelToView, flashClick, playRandomAction]
+      [
+        destroyCurrentModel,
+        ensureCubismCore,
+        ensurePixiApp,
+        fitModelToView,
+        flashClick,
+        onLoadComplete,
+        onLoadError,
+        onLoadProgress,
+        onLoadStart,
+        playRandomAction,
+      ]
     );
 
     const dispose = useCallback(() => {

@@ -1,13 +1,33 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Mic, MicOff, Volume2, VolumeX, Wifi, WifiOff, Play, Trash2, Activity, Loader2, Shield, ShieldCheck, AlertCircle, RefreshCw } from 'lucide-react';
+import {
+  Mic,
+  MicOff,
+  Volume2,
+  VolumeX,
+  Wifi,
+  WifiOff,
+  Play,
+  Trash2,
+  Activity,
+  Loader2,
+  Shield,
+  ShieldCheck,
+  AlertCircle,
+  RefreshCw,
+} from 'lucide-react';
+import Live2DModelPanel from './Live2DModelPanel';
 import { QwenOmniClient, QwenOmniCallbacks } from '../lib/qwen-omni-client';
 import { PCMDecoder } from '../lib/audio/pcm-decoder';
 import { AudioPlayer } from '../lib/audio/audio-player';
 import { AudioProcessor } from '../lib/audio/audio-processor';
 import { AudioSmoother } from '../lib/audio/audio-smoother';
-import { requestMicrophonePermission, checkBrowserCompatibility, BrowserCompatibility } from '../lib/audio/microphone-permission';
+import {
+  requestMicrophonePermission,
+  checkBrowserCompatibility,
+  BrowserCompatibility,
+} from '../lib/audio/microphone-permission';
 import { testQwenConnection, validateApiKey, getEnvironmentInfo } from '../lib/test-connection';
 
 // Types for component status
@@ -26,6 +46,11 @@ export default function OmniChat() {
   const [volume, setVolume] = useState(0.7);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [voice, setVoice] = useState('Cherry');
+
+  const defaultLive2DModelPath =
+    process.env.NEXT_PUBLIC_LIVE2D_MODEL_PATH ||
+    process.env.NEXT_PUBLIC_LIVE2D_DEFAULT_MODEL_PATH ||
+    '/live2d/chara/chara.model3.json';
   
   // 权限和连接测试状态
   const [permissionStatus, setPermissionStatus] = useState<PermissionStatus>('not_requested');
@@ -725,17 +750,14 @@ export default function OmniChat() {
         <div className="md:col-span-2 flex flex-col gap-4">
 
            {/* Live2D Area - Top */}
-           <div className="bg-gradient-to-b from-gray-100 to-gray-50 rounded-xl border border-gray-200 h-[250px] flex items-center justify-center overflow-hidden">
-             <div className="text-gray-400 text-center">
-               <p className="text-sm font-semibold">Live2D Model Area</p>
-               <p className="text-xs mt-1">(Drag model here or integrate)</p>
-             </div>
+           <div className="h-[320px] md:h-[420px]">
+             <Live2DModelPanel defaultModelPath={defaultLive2DModelPath} />
            </div>
 
            {/* Transcript Area - Bottom */}
-           <div 
+           <div
              ref={transcriptRef}
-             className="h-[250px] bg-gray-50 rounded-xl border border-gray-200 p-4 overflow-y-auto space-y-4"
+             className="h-[220px] md:h-[280px] bg-gray-50 rounded-xl border border-gray-200 p-4 overflow-y-auto space-y-4"
            >
               {conversationHistory.length === 0 && !transcript && (
                  <div className="h-full flex flex-col items-center justify-center text-gray-400">
