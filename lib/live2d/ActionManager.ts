@@ -401,20 +401,22 @@ export class ActionManager {
     }
   }
 
+export interface ActionStats {
+  isPlaying: boolean;
+  currentAction?: { name: string; group: string };
+  queueLength: number;
+  availableGroups: string[];
+  totalActions: number;
+}
+
   // Statistics
-  getStats(): {
-    isPlaying: boolean;
-    currentAction?: { name: string; group: string };
-    queueLength: number;
-    availableGroups: string[];
-    totalActions: number;
-  } {
+  getStats(): ActionStats {
     return {
       isPlaying: this.isPlaying,
       currentAction: this.getCurrentAction(),
       queueLength: this.getQueueLength(),
       availableGroups: this.getAvailableActionGroups(),
-      totalActions: this.getAllActions().length,
+      totalActions: this.getAllActions().length || 0,
     };
   }
 

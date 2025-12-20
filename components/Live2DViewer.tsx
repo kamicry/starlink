@@ -41,6 +41,7 @@ export type Live2DViewerHandle = {
     currentAction?: { name: string; group: string };
     queueLength: number;
     availableGroups: string[];
+    totalActions: number;
   };
 };
 
@@ -85,7 +86,7 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
       actionConfig = defaultActionConfig,
       enableMouseTracking = false,
       trackHeadMovement = true,
-      trackEyesMovement = true,
+      trackEyeMovement = true,
       className,
       style,
     },
@@ -334,7 +335,7 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
             }
 
             // Apply eye tracking if enabled
-            if (trackEyesMovement && model.internalModel.motionManager) {
+            if (trackEyeMovement && model.internalModel.motionManager) {
               const eyeX = (cursorPosition.x - 0.5) * 2 * EYE_TRACKING_MULTIPLIER;
               const eyeY = (cursorPosition.y - 0.5) * 2 * EYE_TRACKING_MULTIPLIER;
               
@@ -478,9 +479,11 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
 
             // Apply action configuration
             const config = applyActionConfig(actionConfig);
-            Object.entries(config.groups).forEach(([group, actions]) => {
-              actionManagerRef.current.addActionGroup(group, actions);
-            });
+            if (actionManagerRef.current) {
+              Object.entries(config.groups).forEach(([group, actions]) => {
+                actionManagerRef.current!.addActionGroup(group, actions);
+              });
+            }
 
             // Setup action callbacks
             actionManagerRef.current.setCallbacks({

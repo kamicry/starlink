@@ -1,6 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { Live2DViewer, Live2DViewerHandle } from './Live2DViewer';
 import { defaultActionConfig } from '../lib/live2d/actions';
+import type { ActionStats } from '../lib/live2d/ActionManager';
 
 /**
  * Live2D Action System Test Component
@@ -18,11 +19,12 @@ export default function Live2DActionTest() {
   
   const [modelPath, setModelPath] = useState<string>('');
   const [isLoaded, setIsLoaded] = useState(false);
-  const [actionStats, setActionStats] = useState({
+
+  const [actionStats, setActionStats] = useState<ActionStats>({
     isPlaying: false,
-    currentAction: null as { name: string; group: string } | null,
+    currentAction: undefined,
     queueLength: 0,
-    availableGroups: [] as string[],
+    availableGroups: [],
     totalActions: 0,
   });
   const [lastAction, setLastAction] = useState('');
