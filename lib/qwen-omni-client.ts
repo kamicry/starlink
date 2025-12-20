@@ -111,7 +111,7 @@ export class QwenOmniClient {
       return;
     }
 
-    const model = options.model || 'qwen3-omni-flash-realtime';
+    const model = options.model || 'qwen3-omni-turbo-realtime';
 
     const url = new URL('wss://dashscope.aliyuncs.com/api-ws/v1/realtime');
     url.searchParams.set('model', model);

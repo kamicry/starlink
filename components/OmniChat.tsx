@@ -343,7 +343,7 @@ export default function OmniChat() {
           clientRef.current?.updateSession({
             modalities: ['text', 'audio'],
             voice: voice,
-            instructions: '你是小云，风趣幽默的好助手，请自然地进行对话。',
+            instructions: '你是丰川祥子，风趣幽默的好助手，请自然地进行对话。',
             input_audio_format: 'pcm16',
             output_audio_format: 'pcm16',
             input_audio_transcription: {
@@ -490,7 +490,7 @@ export default function OmniChat() {
   }, []);
 
   return (
-    <div className="w-full max-w-4xl mx-auto p-4 md:p-6 bg-white rounded-xl shadow-lg my-8">
+    <div className="w-full max-w-6xl mx-auto p-4 md:p-6 bg-white rounded-xl shadow-lg my-8">
       {/* Header */}
       <header className="flex justify-between items-center mb-8 border-b pb-4">
         <div>
@@ -523,10 +523,10 @@ export default function OmniChat() {
       </header>
 
       {/* Main Content Area */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
         
         {/* Left Column: Controls */}
-        <div className="md:col-span-1 space-y-6">
+        <div className="lg:col-span-1 space-y-6">
            
            {/* Browser Compatibility Warning */}
            {browserCompatibility && !browserCompatibility.recommended && (
@@ -746,64 +746,72 @@ export default function OmniChat() {
            </div>
         </div>
 
-        {/* Right Column: Live2D + Transcript & Interaction */}
-        <div className="md:col-span-2 flex flex-col gap-4">
-
-           {/* Live2D Area - Top */}
-           <div className="h-[320px] md:h-[420px]">
+        {/* Right Column: Live2D with Floating Chat Window */}
+        <div className="lg:col-span-3 relative">
+           {/* Live2D Area - Full Height */}
+           <div className="h-[320px] lg:h-[440px]">
              <Live2DModelPanel defaultModelPath={defaultLive2DModelPath} />
            </div>
 
-           {/* Transcript Area - Bottom */}
-           <div
-             ref={transcriptRef}
-             className="h-[220px] md:h-[280px] bg-gray-50 rounded-xl border border-gray-200 p-4 overflow-y-auto space-y-4"
-           >
-              {conversationHistory.length === 0 && !transcript && (
-                 <div className="h-full flex flex-col items-center justify-center text-gray-400">
-                    <Activity size={48} className="mb-4 opacity-20" />
-                    <p>Start voice chat to see transcription</p>
-                 </div>
-              )}
+           {/* Floating Chat Window - Bottom overlay with glassmorphism */}
+           <div className="absolute bottom-4 right-4 left-4 h-1/3 bg-white/80 backdrop-blur-sm rounded-t-2xl border border-white/20 shadow-2xl overflow-hidden z-20">
+              {/* Chat Header */}
+              <div className="bg-gray-50 px-3 py-1.5 border-b border-gray-200 flex justify-between items-center">
+                 <span className="text-xs font-medium text-gray-700">💬 Chat</span>
+                 <button 
+                   onClick={clearHistory}
+                   className="text-gray-600 hover:text-red-500 flex items-center gap-1 text-xs transition-colors bg-gray-100 hover:bg-red-100 px-1.5 py-0.5 rounded-md"
+                 >
+                   <Trash2 size={10} /> Clear
+                 </button>
+              </div>
 
-              {conversationHistory.map((msg, idx) => (
-                <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                   <div className={`max-w-[80%] rounded-2xl px-4 py-2 text-sm ${
-                      msg.role === 'user' 
-                        ? 'bg-blue-600 text-white rounded-tr-none' 
-                        : 'bg-white border border-gray-200 text-gray-800 rounded-tl-none shadow-sm'
-                   }`}>
-                      {msg.text}
-                   </div>
-                </div>
-              ))}
+              {/* Chat Content Area */}
+              <div 
+                ref={transcriptRef}
+                className="flex-1 p-3 overflow-y-auto space-y-3 bg-gradient-to-b from-transparent to-black/5"
+                style={{ height: 'calc(100% - 40px)' }}
+              >
+                 {conversationHistory.length === 0 && !transcript && (
+                    <div className="h-full flex flex-col items-center justify-center text-gray-500">
+                       <Activity size={16} className="mb-1 opacity-30" />
+                       <p className="text-xs drop-shadow-sm text-center leading-tight">Start voice chat to see transcription</p>
+                    </div>
+                 )}
 
-              {/* Current Live Transcript */}
-              {transcript && (
-                 <div className="flex justify-start">
-                   <div className="max-w-[80%] bg-white border border-gray-200 text-gray-800 rounded-2xl rounded-tl-none shadow-sm px-4 py-2 text-sm">
-                      <div className="flex items-center gap-2">
-                         <span className="animate-pulse w-1.5 h-1.5 bg-blue-500 rounded-full"></span>
-                         {transcript}
+                 {conversationHistory.map((msg, idx) => (
+                   <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                      <div className={`max-w-[90%] rounded-lg px-2 py-1.5 text-xs shadow-sm backdrop-blur-sm ${
+                         msg.role === 'user' 
+                           ? 'bg-blue-500/80 text-white rounded-tr-md border border-blue-400/30' 
+                           : 'bg-white/80 text-gray-800 rounded-tl-md border border-white/40'
+                      }`}>
+                         {msg.text}
                       </div>
                    </div>
-                 </div>
-              )}
-           </div>
+                 ))}
 
-           {/* Actions Footer */}
-           <div className="mt-4 flex justify-between items-center">
-              <button 
-                onClick={clearHistory}
-                className="text-gray-400 hover:text-red-500 flex items-center gap-1 text-sm transition-colors"
-              >
-                <Trash2 size={14} /> Clear History
-              </button>
+                 {/* Current Live Transcript */}
+                 {transcript && (
+                    <div className="flex justify-start">
+                      <div className="max-w-[90%] bg-amber-100/80 backdrop-blur-sm text-gray-800 rounded-lg rounded-tl-md border border-amber-200/50 shadow-sm px-2 py-1.5 text-xs">
+                         <div className="flex items-center gap-1.5">
+                            <span className="animate-pulse w-1 h-1 bg-amber-500 rounded-full"></span>
+                            <span className="font-medium text-xs">🎤</span>
+                            <span className="leading-tight">{transcript}</span>
+                         </div>
+                      </div>
+                    </div>
+                 )}
+              </div>
 
+              {/* Error Message */}
               {errorMsg && (
-                <div className="text-red-500 text-sm bg-red-50 px-3 py-1 rounded-full border border-red-100 animate-fade-in">
-                   {errorMsg}
-                </div>
+                 <div className="absolute bottom-2 left-2 right-2">
+                    <div className="text-red-700 text-xs bg-red-100/80 backdrop-blur-sm px-3 py-2 rounded-lg border border-red-200/50 animate-fade-in">
+                       {errorMsg}
+                    </div>
+                 </div>
               )}
            </div>
 

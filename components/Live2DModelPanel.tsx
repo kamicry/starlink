@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import clsx from 'clsx';
-import { AlertCircle, Loader2, RefreshCw } from 'lucide-react';
+import { AlertCircle, Loader2, RefreshCw, ZoomIn, ZoomOut, RotateCcw, Lock, Unlock } from 'lucide-react';
 import Live2DViewer, { Live2DLoadProgress, Live2DViewerHandle } from './Live2DViewer';
 
 export type Live2DModelPanelProps = {
@@ -30,6 +30,7 @@ export default function Live2DModelPanel({ defaultModelPath, className }: Live2D
   const [loadStage, setLoadStage] = useState<string>('');
   const [loadError, setLoadError] = useState<string | null>(null);
   const [lastAction, setLastAction] = useState<string | null>(null);
+  const [isLocked, setIsLocked] = useState(false);
 
   const triggerLoad = useCallback(async () => {
     const path = inputPath.trim();
@@ -109,6 +110,53 @@ export default function Live2DModelPanel({ defaultModelPath, className }: Live2D
         >
           <RefreshCw size={16} />
           重新加载
+        </button>
+      </div>
+
+      <div className="absolute right-3 top-3 flex gap-2">
+        <button
+          onClick={() => {
+            viewerRef.current?.zoomIn();
+          }}
+          className="rounded-full bg-white/80 p-1.5 shadow-sm hover:bg-white transition-colors"
+          title="放大"
+        >
+          <ZoomIn size={16} />
+        </button>
+        <button
+          onClick={() => {
+            viewerRef.current?.zoomOut();
+          }}
+          className="rounded-full bg-white/80 p-1.5 shadow-sm hover:bg-white transition-colors"
+          title="缩小"
+        >
+          <ZoomOut size={16} />
+        </button>
+        <button
+          onClick={() => {
+            viewerRef.current?.resetZoom();
+          }}
+          className="rounded-full bg-white/80 p-1.5 shadow-sm hover:bg-white transition-colors"
+          title="重置缩放"
+        >
+          <RotateCcw size={16} />
+        </button>
+        <button
+          onClick={() => {
+            if (isLocked) {
+              viewerRef.current?.unlock();
+            } else {
+              viewerRef.current?.lock();
+            }
+            setIsLocked(!isLocked);
+          }}
+          className={clsx(
+            "rounded-full p-1.5 shadow-sm transition-colors",
+            isLocked ? "bg-red-100 hover:bg-red-200" : "bg-white/80 hover:bg-white"
+          )}
+          title={isLocked ? "解锁" : "锁定"}
+        >
+          {isLocked ? <Unlock size={16} /> : <Lock size={16} />}
         </button>
       </div>
 

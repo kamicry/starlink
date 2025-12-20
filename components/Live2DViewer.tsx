@@ -30,6 +30,11 @@ export type Live2DViewerHandle = {
   loadModel: (path: string) => Promise<void>;
   playAction: (actionName: string) => void;
   playRandomAction: () => void;
+  zoomIn: () => void;
+  zoomOut: () => void;
+  resetZoom: () => void;
+  lock: () => void;
+  unlock: () => void;
   dispose: () => void;
 };
 
@@ -82,6 +87,49 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
     const disposedRef = useRef(false);
 
     const [isClickFlashing, setIsClickFlashing] = useState(false);
+    const [isLocked, setIsLocked] = useState(false);
+    const [currentScale, setCurrentScale] = useState(1);
+    const [baseScale, setBaseScale] = useState(1);
+    const [isDragging, setIsDragging] = useState(false);
+    const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+    const [modelPosition, setModelPosition] = useState({ x: 0, y: 0 });
+
+    // Drag functionality
+    const handleMouseDown = useCallback((event: any) => {
+      if (isLocked) return;
+      
+      event.preventDefault();
+      event.stopPropagation();
+      setIsDragging(true);
+      setDragStart({
+        x: event.clientX - modelPosition.x,
+        y: event.clientY - modelPosition.y
+      });
+    }, [isLocked, modelPosition]);
+
+    const handleMouseMove = useCallback((event: MouseEvent) => {
+      if (!isDragging || isLocked) return;
+      
+      event.preventDefault();
+      
+      const newX = event.clientX - dragStart.x;
+      const newY = event.clientY - dragStart.y;
+      
+      setModelPosition({
+        x: newX,
+        y: newY
+      });
+      
+      // Also update model position immediately for smoother dragging
+      const model = modelRef.current;
+      if (model) {
+        model.position?.set?.(newX, newY);
+      }
+    }, [isDragging, isLocked, dragStart]);
+
+    const handleMouseUp = useCallback(() => {
+      setIsDragging(false);
+    }, []);
 
     const fitModelToView = useCallback(() => {
       const container = containerRef.current;
@@ -103,18 +151,61 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
       const contentWidth = Math.max(1, bounds.width);
       const contentHeight = Math.max(1, bounds.height);
 
-      const scale = Math.min(
+      const baseFitScale = Math.min(
         (width - padding * 2) / contentWidth,
         (height - padding * 2) / contentHeight
       );
 
-      if (Number.isFinite(scale) && scale > 0) {
-        model.scale?.set?.(scale, scale);
+      if (Number.isFinite(baseFitScale) && baseFitScale > 0) {
+        // Set base scale for zoom calculations
+        if (baseScale === 1) {
+          setBaseScale(baseFitScale);
+        }
+        
+        const finalScale = isLocked ? currentScale : baseFitScale * currentScale;
+        model.scale?.set?.(finalScale, finalScale);
+        model.pivot?.set?.(bounds.x + bounds.width / 2, bounds.y + bounds.height);
+        
+        if (isDragging && !isLocked) {
+          model.position?.set?.(modelPosition.x, modelPosition.y);
+        } else if (!isDragging && !isLocked && (modelPosition.x !== 0 || modelPosition.y !== 0)) {
+          // Reset to center when not dragging and not locked, but only if position was changed
+          setModelPosition({ x: 0, y: 0 });
+          model.position?.set?.(width / 2, height - padding);
+        } else if (isLocked) {
+          // Keep current position when locked
+          model.position?.set?.(modelPosition.x, modelPosition.y);
+        } else {
+          model.position?.set?.(width / 2, height - padding);
+        }
       }
+    }, [baseScale, currentScale, isLocked, isDragging, modelPosition]);
 
-      model.pivot?.set?.(bounds.x + bounds.width / 2, bounds.y + bounds.height);
-      model.position?.set?.(width / 2, height - padding);
-    }, []);
+    // Set up global mouse events for dragging
+    useEffect(() => {
+      if (isDragging) {
+        document.addEventListener('mousemove', handleMouseMove);
+        document.addEventListener('mouseup', handleMouseUp);
+        return () => {
+          document.removeEventListener('mousemove', handleMouseMove);
+          document.removeEventListener('mouseup', handleMouseUp);
+        };
+      }
+    }, [isDragging, handleMouseMove, handleMouseUp]);
+
+    // Update cursor when drag state or lock state changes
+    useEffect(() => {
+      const model = modelRef.current;
+      if (!model) return;
+
+      if (isDragging) {
+        model.cursor = 'moving';
+      } else if (isLocked) {
+        model.cursor = 'default';
+      } else {
+        model.cursor = 'grab';
+      }
+    }, [isDragging, isLocked]);
 
     const destroyCurrentModel = useCallback(() => {
       const app = appRef.current;
@@ -134,8 +225,35 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
         // ignore
       } finally {
         modelRef.current = null;
+        setBaseScale(1); // Reset base scale when model is destroyed
       }
     }, []);
+
+    // Zoom and Lock functionality
+    const zoomIn = useCallback(() => {
+      setCurrentScale(prev => Math.min(prev * 1.2, 5)); // Max zoom 5x
+      fitModelToView();
+    }, [fitModelToView]);
+
+    const zoomOut = useCallback(() => {
+      setCurrentScale(prev => Math.max(prev * 0.8, 0.2)); // Min zoom 0.2x
+      fitModelToView();
+    }, [fitModelToView]);
+
+    const resetZoom = useCallback(() => {
+      setCurrentScale(1);
+      fitModelToView();
+    }, [fitModelToView]);
+
+    const lock = useCallback(() => {
+      setIsLocked(true);
+      fitModelToView();
+    }, [fitModelToView]);
+
+    const unlock = useCallback(() => {
+      setIsLocked(false);
+      fitModelToView();
+    }, [fitModelToView]);
 
     const ensurePixiApp = useCallback(async () => {
       if (disposedRef.current) return;
@@ -352,12 +470,24 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
 
           model.interactive = true;
           model.buttonMode = true;
-          model.cursor = 'pointer';
 
+          // 添加鼠标事件监听器
+          model.on?.('pointerdown', handleMouseDown);
           model.on?.('pointertap', () => {
-            flashClick();
-            playRandomAction();
+            if (!isDragging) {
+              flashClick();
+              playRandomAction();
+            }
           });
+
+          // 设置cursor
+          if (isDragging) {
+            model.cursor = 'moving';
+          } else if (isLocked) {
+            model.cursor = 'default';
+          } else {
+            model.cursor = 'grab';
+          }
 
           tickerFnRef.current = () => {
             model.update?.(app.ticker.deltaMS);
@@ -420,9 +550,14 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
         loadModel,
         playAction,
         playRandomAction,
+        zoomIn,
+        zoomOut,
+        resetZoom,
+        lock,
+        unlock,
         dispose,
       }),
-      [dispose, loadModel, playAction, playRandomAction]
+      [dispose, loadModel, playAction, playRandomAction, zoomIn, zoomOut, resetZoom, lock, unlock]
     );
 
     useEffect(() => {
@@ -438,7 +573,7 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
       loadModel(modelPath).catch((error) => {
         console.error('Failed to load Live2D model:', error);
       });
-    }, [loadModel, modelPath]);
+    }, [modelPath]); // 只依赖modelPath，避免无限循环
 
     return (
       <div
