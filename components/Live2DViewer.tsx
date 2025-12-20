@@ -7,9 +7,10 @@ import React, {
   useState,
 } from 'react';
 import clsx from 'clsx';
-import { parseModelConfig, Live2DModelConfig, getAvailableMotionGroups, getAvailableExpressions } from '../lib/live2d/model-parser';
+import { parseModelConfig, Live2DModelConfig } from '../lib/live2d/model-parser';
 import { loadEmotionMapping, EmotionMapping, getExpressionForEmotion, getMotionForEmotion } from '../lib/live2d/emotion-mapping';
 import { MouseTracker } from '../lib/live2d/mouse-tracker';
+import { MotionManager } from '../lib/live2d/motion-manager';
 
 export type Live2DLoadStage =
   | 'starting'
@@ -54,7 +55,6 @@ export type Live2DViewerProps = {
 };
 
 type PixiApp = any;
-
 type Live2DModelInstance = any;
 
 const CLICK_FLASH_MS = 120;
@@ -79,12 +79,12 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
     ref
   ) {
     const containerRef = useRef<HTMLDivElement | null>(null);
-
     const appRef = useRef<PixiApp | null>(null);
     const pixiRef = useRef<any>(null);
     const modelRef = useRef<Live2DModelInstance | null>(null);
     const tickerFnRef = useRef<((delta: number) => void) | null>(null);
     const mouseTrackerRef = useRef<MouseTracker | null>(null);
+    const motionManagerRef = useRef<MotionManager | null>(null);
 
     const initPromiseRef = useRef<Promise<void> | null>(null);
     const resizeObserverRef = useRef<ResizeObserver | null>(null);
@@ -94,8 +94,8 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
     const [isClickFlashing, setIsClickFlashing] = useState(false);
     const [modelConfig, setModelConfig] = useState<Live2DModelConfig | null>(null);
     const [emotionMapping, setEmotionMapping] = useState<EmotionMapping | null>(null);
-    const [currentEmotion, setCurrentEmotion] = useState<string>('neutral');
     const [configError, setConfigError] = useState<string | null>(null);
+    const [clickCounter, setClickCounter] = useState(0);
 
     const fitModelToView = useCallback(() => {
       const container = containerRef.current;
@@ -148,6 +148,10 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
         // ignore
       } finally {
         modelRef.current = null;
+        if (motionManagerRef.current) {
+          motionManagerRef.current.dispose();
+          motionManagerRef.current = null;
+        }
       }
     }, []);
 
@@ -335,7 +339,6 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
         if (!emotionMapping) return;
 
         const normalizedEmotion = emotion.toLowerCase().trim();
-        setCurrentEmotion(normalizedEmotion);
 
         // 获取对应的表情和动作
         const expression = getExpressionForEmotion(emotionMapping, normalizedEmotion);
@@ -357,16 +360,21 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
     );
 
     const getAvailableMotionGroups = useCallback((): string[] => {
-      const model = modelRef.current;
-      if (!model) return [];
+      const model = motionManagerRef.current;
+      if (model) {
+        return motionManagerRef.current!.getMotionGroups();
+      }
+      
+      const modelFallback = modelRef.current;
+      if (!modelFallback) return [];
 
-      const fromSettings = model.internalModel?.settings?.motions;
+      const fromSettings = modelFallback.internalModel?.settings?.motions;
       if (fromSettings && typeof fromSettings === 'object') {
         const keys = Object.keys(fromSettings);
         if (keys.length > 0) return keys;
       }
 
-      const fromMotionManager = model.internalModel?.motionManager?.motionGroups;
+      const fromMotionManager = modelFallback.internalModel?.motionManager?.motionGroups;
       if (fromMotionManager && typeof fromMotionManager === 'object') {
         const keys = Object.keys(fromMotionManager);
         if (keys.length > 0) return keys;
@@ -375,23 +383,28 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
       return ['Idle', 'TapBody', 'TapHead'];
     }, []);
 
-    const playRandomAction = useCallback(() => {
-      const groups = getAvailableMotionGroups();
-      if (groups.length === 0) return;
-
-      const actionName = groups[Math.floor(Math.random() * groups.length)];
-      playAction(actionName);
-    }, [getAvailableMotionGroups, playAction]);
-
     const flashClick = useCallback(() => {
       setIsClickFlashing(true);
       window.setTimeout(() => setIsClickFlashing(false), CLICK_FLASH_MS);
     }, []);
 
-    // 加载模型配置和情绪映射
+    const playRandomAction = useCallback(async () => {
+      // 使用 MotionManager 播放随机动作
+      if (motionManagerRef.current) {
+        await motionManagerRef.current.playRandomMotion();
+      } else {
+        // 回退到简单逻辑
+        const groups = getAvailableMotionGroups();
+        if (groups.length === 0) return;
+        
+        const actionName = groups[Math.floor(Math.random() * groups.length)];
+        playAction(actionName);
+      }
+    }, [getAvailableMotionGroups, playAction]);
+
     const loadModelConfig = useCallback(async (modelPath: string) => {
       try {
-        console.log('🔄 开始解析 Live2D 模型配置...');
+        console.log('🔄 Loading Live2D model configuration...');
         setConfigError(null);
         
         // 解析模型配置
@@ -402,10 +415,10 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
         const mapping = await loadEmotionMapping(modelPath);
         setEmotionMapping(mapping);
         
-        console.log('✅ 模型配置和情绪映射加载成功');
+        console.log('✅ Model configuration and emotion mapping loaded successfully');
         return true;
       } catch (error) {
-        console.error('❌ 加载模型配置失败:', error);
+        console.error('❌ Failed to load model configuration:', error);
         setConfigError(error instanceof Error ? error.message : 'Unknown error');
         return false;
       }
@@ -497,16 +510,42 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
           }
 
           modelRef.current = model;
-          app.stage.addChild(model);
+          
+          // 创建 MotionManager 实例
+          if (modelConfig) {
+            motionManagerRef.current = new MotionManager(model, modelConfig);
+            console.log('🎬 MotionManager created for model');
+          }
+          
+          // 添加点击事件处理 - 全局点击触发随机动作
+          const clickHandler = (event: MouseEvent) => {
+            const canvas = app.view as HTMLCanvasElement;
+            const rect = canvas.getBoundingClientRect();
+            const x = event.clientX - rect.left;
+            const y = event.clientY - rect.top;
 
-          model.interactive = true;
-          model.buttonMode = true;
-          model.cursor = 'pointer';
-
-          model.on?.('pointertap', () => {
+            // 更新点击计数器（用于调试）
+            setClickCounter(prev => prev + 1);
+            
+            // 闪光灯效果
             flashClick();
-            playRandomAction();
-          });
+            
+            // 触发随机动作
+            if (motionManagerRef.current) {
+              console.log(`🖱️ Click at (${Math.round(x)}, ${Math.round(y)}) - Playing random motion...`);
+              motionManagerRef.current.playRandomMotion().catch(error => {
+                console.error('Failed to play motion:', error);
+              });
+            }
+          };
+          
+          const canvas = app.view as HTMLCanvasElement;
+          canvas.addEventListener('click', clickHandler);
+          
+          // 保存事件监听器引用以便清理
+          (canvas as any)._clickHandler = clickHandler;
+
+          app.stage.addChild(model);
 
           tickerFnRef.current = () => {
             model.update?.(app.ticker.deltaMS);
@@ -532,11 +571,12 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
         ensurePixiApp,
         fitModelToView,
         flashClick,
+        loadModelConfig,
+        modelConfig,
         onLoadComplete,
         onLoadError,
         onLoadProgress,
         onLoadStart,
-        playRandomAction,
         startMouseTracking,
       ]
     );
@@ -546,10 +586,23 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
 
       // 停止鼠标跟踪
       stopMouseTracking();
+      
+      // 清理 MotionManager
+      if (motionManagerRef.current) {
+        motionManagerRef.current.dispose();
+        motionManagerRef.current = null;
+      }
 
       const app = appRef.current;
       if (app) {
         try {
+          // 清理点击事件监听器
+          const canvas = app.view as HTMLCanvasElement;
+          if ((canvas as any)._clickHandler) {
+            canvas.removeEventListener('click', (canvas as any)._clickHandler);
+            delete (canvas as any)._clickHandler;
+          }
+          
           destroyCurrentModel();
           resizeObserverRef.current?.disconnect();
           resizeObserverRef.current = null;
@@ -563,8 +616,7 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
       appRef.current = null;
       pixiRef.current = null;
       initPromiseRef.current = null;
-      mouseTrackerRef.current = null;
-
+      
       const container = containerRef.current;
       if (container) {
         container.innerHTML = '';
@@ -603,6 +655,13 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
       });
     }, [loadModel, modelPath]);
 
+    // 点击计数器调试信息显示
+    useEffect(() => {
+      if (clickCounter > 0) {
+        console.log(`📊 Click counter: ${clickCounter} clicks detected`);
+      }
+    }, [clickCounter]);
+
     return (
       <div
         className={clsx(
@@ -614,39 +673,31 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
       >
         <div ref={containerRef} className="absolute inset-0" />
         
-        {/* 调试信息显示（仅开发环境） */}
+        {/* 调试信息面板 */}
         {process.env.NODE_ENV === 'development' && (
-          <div className="absolute top-2 left-2 bg-black/70 text-white p-2 rounded text-xs font-mono z-10 max-w-sm">
+          <div className="absolute top-2 left-2 bg-black/70 text-white p-2 rounded text-xs font-mono z-10 max-w-xs space-y-1">
             {configError && (
-              <div className="text-red-400 mb-2">
-                ❌ Config Error: {configError}
+              <div className="text-red-400">
+                ❌ Error: {configError}
               </div>
             )}
             
             {modelConfig && (
-              <div className="space-y-1">
-                <div className="text-green-400 font-semibold">✅ Model Config</div>
+              <>
+                <div className="text-green-400 font-semibold">✅ Config</div>
                 <div>Motions: {Object.keys(modelConfig.motions).join(', ') || 'None'}</div>
                 <div>Expressions: {Object.keys(modelConfig.expressions).join(', ') || 'None'}</div>
                 <div>Physics: {modelConfig.hasPhysics ? 'Yes' : 'No'}</div>
-                <div>Hit Areas: {modelConfig.hitAreas.join(', ') || 'None'}</div>
-                <div>Version: {modelConfig.version}</div>
-              </div>
+              </>
             )}
             
-            {emotionMapping && (
-              <div className="space-y-1 mt-2">
-                <div className="text-blue-400 font-semibold">🎭 Emotion Mapping</div>
-                <div>Current: {currentEmotion}</div>
-                <div>Mappings: {Object.keys(emotionMapping.emotionToExpression).length}</div>
-              </div>
+            {motionManagerRef.current && (
+              <div className="text-blue-400 font-semibold">🎬 Motion Manager</div>
             )}
             
-            <div className="space-y-1 mt-2">
-              <div className="text-yellow-400 font-semibold">🖱️ Mouse Tracking</div>
-              <div>Status: {mouseTrackerRef.current?.isActive ? '✅ Active' : '⏸️ Inactive'}</div>
-              <div>Eye Scale: 0.8 | Head Scale: 0.4</div>
-            </div>
+            <div className="text-yellow-400 font-semibold">🖱️ Click Status</div>
+            <div>Clicks: {clickCounter}</div>
+            <div>Random Motion: Enabled</div>
           </div>
         )}
       </div>
