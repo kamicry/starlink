@@ -9,6 +9,7 @@ import React, {
 import clsx from 'clsx';
 import { parseModelConfig, Live2DModelConfig, getAvailableMotionGroups, getAvailableExpressions } from '../lib/live2d/model-parser';
 import { loadEmotionMapping, EmotionMapping, getExpressionForEmotion, getMotionForEmotion } from '../lib/live2d/emotion-mapping';
+import { MouseTracker } from '../lib/live2d/mouse-tracker';
 
 export type Live2DLoadStage =
   | 'starting'
@@ -37,6 +38,8 @@ export type Live2DViewerHandle = {
   getModelConfig: () => Live2DModelConfig | null;
   getEmotionMapping: () => EmotionMapping | null;
   dispose: () => void;
+  startMouseTracking: () => void;
+  stopMouseTracking: () => void;
 };
 
 export type Live2DViewerProps = {
@@ -81,6 +84,7 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
     const pixiRef = useRef<any>(null);
     const modelRef = useRef<Live2DModelInstance | null>(null);
     const tickerFnRef = useRef<((delta: number) => void) | null>(null);
+    const mouseTrackerRef = useRef<MouseTracker | null>(null);
 
     const initPromiseRef = useRef<Promise<void> | null>(null);
     const resizeObserverRef = useRef<ResizeObserver | null>(null);
@@ -219,6 +223,55 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
       });
 
       await w.__live2dCubismCoreLoadingPromise;
+    }, []);
+
+    // 启动鼠标跟踪
+    const startMouseTracking = useCallback(() => {
+      const model = modelRef.current;
+      const app = appRef.current;
+      
+      if (!model || !app) {
+        console.warn('Cannot start mouse tracking: model or app not available');
+        return;
+      }
+
+      const canvas = app.view as HTMLCanvasElement;
+      if (!canvas) {
+        console.warn('Cannot start mouse tracking: canvas not available');
+        return;
+      }
+
+      // 停止现有的跟踪器
+      if (mouseTrackerRef.current) {
+        mouseTrackerRef.current.stopTracking();
+        mouseTrackerRef.current = null;
+      }
+
+      try {
+        // 创建新的跟踪器
+        const tracker = new MouseTracker({
+          canvasElement: canvas,
+          model: model,
+          smoothness: 0.08,
+          eyeTrackingScale: 0.8,
+          headTrackingScale: 0.4,
+        });
+
+        mouseTrackerRef.current = tracker;
+        tracker.startTracking();
+        console.log('🖱️ Mouse tracking started');
+      } catch (error) {
+        console.error('Failed to start mouse tracking:', error);
+      }
+    }, []);
+
+    // 停止鼠标跟踪
+    const stopMouseTracking = useCallback(() => {
+      if (mouseTrackerRef.current) {
+        mouseTrackerRef.current.stopTracking();
+        mouseTrackerRef.current = null;
+        console.log('🛑 Mouse tracking stopped');
+      }
     }, []);
 
     const playAction = useCallback(
@@ -462,6 +515,9 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
 
           fitModelToView();
 
+          // 启动鼠标跟踪
+          startMouseTracking();
+
           notifyProgress(100, 'ready');
           onLoadComplete?.(path);
         } catch (err) {
@@ -481,11 +537,15 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
         onLoadProgress,
         onLoadStart,
         playRandomAction,
+        startMouseTracking,
       ]
     );
 
     const dispose = useCallback(() => {
       disposedRef.current = true;
+
+      // 停止鼠标跟踪
+      stopMouseTracking();
 
       const app = appRef.current;
       if (app) {
@@ -503,12 +563,13 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
       appRef.current = null;
       pixiRef.current = null;
       initPromiseRef.current = null;
+      mouseTrackerRef.current = null;
 
       const container = containerRef.current;
       if (container) {
         container.innerHTML = '';
       }
-    }, [destroyCurrentModel]);
+    }, [destroyCurrentModel, stopMouseTracking]);
 
     useImperativeHandle(
       ref,
@@ -521,8 +582,10 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
         getModelConfig: () => modelConfig,
         getEmotionMapping: () => emotionMapping,
         dispose,
+        startMouseTracking,
+        stopMouseTracking,
       }),
-      [dispose, loadModel, playAction, playRandomAction, playExpression, setEmotion, modelConfig, emotionMapping]
+      [dispose, loadModel, playAction, playRandomAction, playExpression, setEmotion, modelConfig, emotionMapping, startMouseTracking, stopMouseTracking]
     );
 
     useEffect(() => {
@@ -578,6 +641,12 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
                 <div>Mappings: {Object.keys(emotionMapping.emotionToExpression).length}</div>
               </div>
             )}
+            
+            <div className="space-y-1 mt-2">
+              <div className="text-yellow-400 font-semibold">🖱️ Mouse Tracking</div>
+              <div>Status: {mouseTrackerRef.current?.isActive ? '✅ Active' : '⏸️ Inactive'}</div>
+              <div>Eye Scale: 0.8 | Head Scale: 0.4</div>
+            </div>
           </div>
         )}
       </div>
