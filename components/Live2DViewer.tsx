@@ -7,6 +7,8 @@ import React, {
   useState,
 } from 'react';
 import clsx from 'clsx';
+import { ActionManager, ActionInfo } from '../lib/live2d/ActionManager';
+import { defaultActionConfig, applyActionConfig } from '../lib/live2d/actions';
 
 export type Live2DLoadStage =
   | 'starting'
@@ -29,8 +31,18 @@ export type Live2DLoadProgress = {
 export type Live2DViewerHandle = {
   loadModel: (path: string) => Promise<void>;
   playAction: (actionName: string) => void;
-  playRandomAction: () => void;
+  playRandomAction: (groupName?: string) => void;
+  playRandomActionFromGroup: (groupName: string) => void;
+  queueAction: (actionName: string, groupName?: string) => void;
+  stopAction: () => void;
   dispose: () => void;
+  getActionStats: () => {
+    isPlaying: boolean;
+    currentAction?: { name: string; group: string };
+    queueLength: number;
+    availableGroups: string[];
+    totalActions: number;
+  };
 };
 
 export type Live2DViewerProps = {
@@ -40,6 +52,10 @@ export type Live2DViewerProps = {
   onLoadProgress?: (progress: Live2DLoadProgress) => void;
   onLoadComplete?: (path: string) => void;
   onLoadError?: (path: string, error: Error) => void;
+  actionConfig?: typeof defaultActionConfig;
+  enableMouseTracking?: boolean;
+  trackHeadMovement?: boolean;
+  trackEyeMovement?: boolean;
   className?: string;
   style?: React.CSSProperties;
 };
@@ -49,6 +65,9 @@ type PixiApp = any;
 type Live2DModelInstance = any;
 
 const CLICK_FLASH_MS = 120;
+const MOUSE_TRACKING_INTERVAL_MS = 50;
+const HEAD_TRACKING_MULTIPLIER = 0.3;
+const EYE_TRACKING_MULTIPLIER = 2.0;
 
 function toError(err: unknown): Error {
   if (err instanceof Error) return err;
@@ -64,6 +83,10 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
       onLoadProgress,
       onLoadComplete,
       onLoadError,
+      actionConfig = defaultActionConfig,
+      enableMouseTracking = false,
+      trackHeadMovement = true,
+      trackEyeMovement = true,
       className,
       style,
     },
@@ -75,6 +98,7 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
     const pixiRef = useRef<any>(null);
     const modelRef = useRef<Live2DModelInstance | null>(null);
     const tickerFnRef = useRef<((delta: number) => void) | null>(null);
+    const actionManagerRef = useRef<ActionManager | null>(null);
 
     const initPromiseRef = useRef<Promise<void> | null>(null);
     const resizeObserverRef = useRef<ResizeObserver | null>(null);
@@ -82,6 +106,8 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
     const disposedRef = useRef(false);
 
     const [isClickFlashing, setIsClickFlashing] = useState(false);
+    const [cursorPosition, setCursorPosition] = useState({ x: 0.5, y: 0.5 });
+    const mouseTrackingIntervalRef = useRef<number | null>(null);
 
     const fitModelToView = useCallback(() => {
       const container = containerRef.current;
@@ -268,6 +294,95 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
       window.setTimeout(() => setIsClickFlashing(false), CLICK_FLASH_MS);
     }, []);
 
+    // Mouse tracking functions
+    const setupMouseTracking = useCallback(() => {
+      if (!enableMouseTracking || !containerRef.current) return;
+
+      const container = containerRef.current;
+      
+      const updateMousePosition = (e: MouseEvent) => {
+        const rect = container.getBoundingClientRect();
+        const x = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+        const y = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+        setCursorPosition({ x, y });
+
+        // Update model focus point for eye/head tracking
+        const model = modelRef.current;
+        if (model && model.focus && !model.internalModel?.motionManager?.isFinished) {
+          model.focus(x, y);
+        }
+      };
+
+      const handleMouseEnter = () => {
+        if (mouseTrackingIntervalRef.current) {
+          window.clearInterval(mouseTrackingIntervalRef.current);
+        }
+        
+        mouseTrackingIntervalRef.current = window.setInterval(() => {
+          const model = modelRef.current;
+          if (model && model.internalModel) {
+            // Apply head tracking if enabled
+            if (trackHeadMovement && model.internalModel.motionManager) {
+              // Model's head will follow mouse cursor
+              model.internalModel.motionManager.setParameterValueById(
+                'ParamAngleX',
+                (cursorPosition.x - 0.5) * 30 * HEAD_TRACKING_MULTIPLIER
+              );
+              model.internalModel.motionManager.setParameterValueById(
+                'ParamAngleY',
+                (cursorPosition.y - 0.5) * 30 * HEAD_TRACKING_MULTIPLIER
+              );
+            }
+
+            // Apply eye tracking if enabled
+            if (trackEyeMovement && model.internalModel.motionManager) {
+              const eyeX = (cursorPosition.x - 0.5) * 2 * EYE_TRACKING_MULTIPLIER;
+              const eyeY = (cursorPosition.y - 0.5) * 2 * EYE_TRACKING_MULTIPLIER;
+              
+              model.internalModel.motionManager.setParameterValueById(
+                'ParamEyeBallX',
+                eyeX
+              );
+              model.internalModel.motionManager.setParameterValueById(
+                'ParamEyeBallY',
+                eyeY
+              );
+            }
+          }
+        }, MOUSE_TRACKING_INTERVAL_MS);
+      };
+
+      const handleMouseLeave = () => {
+        if (mouseTrackingIntervalRef.current) {
+          window.clearInterval(mouseTrackingIntervalRef.current);
+          mouseTrackingIntervalRef.current = null;
+        }
+        
+        // Reset to center position
+        setCursorPosition({ x: 0.5, y: 0.5 });
+        
+        const model = modelRef.current;
+        if (model && model.internalModel?.motionManager) {
+          // Reset head position
+          model.internalModel.motionManager.setParameterValueById('ParamAngleX', 0);
+          model.internalModel.motionManager.setParameterValueById('ParamAngleY', 0);
+          // Reset eye position
+          model.internalModel.motionManager.setParameterValueById('ParamEyeBallX', 0);
+          model.internalModel.motionManager.setParameterValueById('ParamEyeBallY', 0);
+        }
+      };
+
+      container.addEventListener('mousemove', updateMousePosition);
+      container.addEventListener('mouseenter', handleMouseEnter);
+      container.addEventListener('mouseleave', handleMouseLeave);
+
+      return () => {
+        container.removeEventListener('mousemove', updateMousePosition);
+        container.removeEventListener('mouseenter', handleMouseEnter);
+        container.removeEventListener('mouseleave', handleMouseLeave);
+      };
+    }, [enableMouseTracking, trackHeadMovement, trackEyesMovement, cursorPosition]);
+
     const loadModel = useCallback(
       async (path: string) => {
         if (!path) return;
@@ -354,9 +469,115 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
           model.buttonMode = true;
           model.cursor = 'pointer';
 
-          model.on?.('pointertap', () => {
+          // Setup Action Manager
+          const internalModel = model.internalModel;
+          const motionManager = internalModel?.motionManager;
+          const expressionManager = internalModel?.expressionManager;
+
+          if (motionManager) {
+            actionManagerRef.current = new ActionManager(motionManager, expressionManager);
+
+            // Apply action configuration
+            const config = applyActionConfig(actionConfig);
+            if (actionManagerRef.current) {
+              Object.entries(config.groups).forEach(([group, actions]) => {
+                actionManagerRef.current!.addActionGroup(group, actions);
+              });
+            }
+
+            // Setup action callbacks
+            actionManagerRef.current.setCallbacks({
+              onActionStart: (actionName) => {
+                console.log(`[ActionManager] Action started: ${actionName}`);
+                onAction?.(actionName);
+              },
+              onActionComplete: (actionName) => {
+                console.log(`[ActionManager] Action completed: ${actionName}`);
+                // Resume idle motion if model is idle
+                const stats = actionManagerRef.current?.getStats();
+                if (stats && stats.queueLength === 0 && !stats.isPlaying) {
+                  actionManagerRef.current?.playRandomAction('Idle');
+                }
+              },
+              onActionStop: (actionName) => {
+                console.log(`[ActionManager] Action stopped: ${actionName}`);
+              },
+            });
+
+            // Load available motions from model settings
+            if (internalModel?.settings?.motions) {
+              Object.entries(internalModel.settings.motions).forEach(([group, motions]) => {
+                if (Array.isArray(motions)) {
+                  const actions: ActionInfo[] = motions.map((motion: any, index: number) => ({
+                    name: motion?.File || `${group}_${index}`,
+                    group: group,
+                    priority: 'normal',
+                    weight: 100,
+                    loop: group === 'Idle',
+                    duration: motion?.FadeIn ? motion.FadeIn * 1000 : 3000,
+                  }));
+                  actionManagerRef.current.addActionGroup(group, actions);
+                }
+              });
+            }
+
+            // Setup model event listeners
+            model.on?.('motion', (group: string, index: number, actionName: string) => {
+              if (actionManagerRef.current) {
+                const motionManager = model.internalModel?.motionManager;
+                if (motionManager) {
+                  motionManager.isFinished = false;
+                }
+              }
+            });
+
+            model.internalModel?.motionManager?.on?.('motionFinish', () => {
+              if (model.internalModel?.motionManager) {
+                model.internalModel.motionManager.isFinished = true;
+                actionManagerRef.current?.onActionComplete();
+              }
+            });
+          }
+
+          // Setup mouse tracking if enabled
+          if (enableMouseTracking) {
+            setupMouseTracking();
+          }
+
+          // Enhanced click interaction with hit testing
+          model.on?.('pointertap', (event: any) => {
             flashClick();
-            playRandomAction();
+            
+            // Hit testing for precise click detection
+            const hitAreas: string[] = [];
+            if (model.hitTest && model.internalModel?.hitAreaFrames) {
+              const point = event?.data?.global;
+              if (point) {
+                // Test common hit areas
+                const areas = ['Head', 'Body', 'Face'];
+                for (const area of areas) {
+                  if (model.hitTest?.(point.x, point.y, area)) {
+                    hitAreas.push(area);
+                  }
+                }
+              }
+            }
+
+            // Play appropriate action based on hit area
+            const actionManager = actionManagerRef.current;
+            if (actionManager) {
+              if (hitAreas.includes('Head')) {
+                actionManager.playRandomAction('TapHead');
+              } else if (hitAreas.includes('Body') || hitAreas.length > 0) {
+                actionManager.playRandomAction('TapBody');
+              } else {
+                // Fallback to random action
+                actionManager.playRandomAction();
+              }
+            } else {
+              // Fallback for compatibility
+              playRandomAction();
+            }
           });
 
           tickerFnRef.current = () => {
@@ -365,6 +586,11 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
           app.ticker.add(tickerFnRef.current);
 
           fitModelToView();
+
+          // Start with idle animation if available
+          if (actionManagerRef.current) {
+            actionManagerRef.current.playRandomAction('Idle');
+          }
 
           notifyProgress(100, 'ready');
           onLoadComplete?.(path);
@@ -388,8 +614,66 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
       ]
     );
 
+    const playRandomActionFromGroup = useCallback((groupName: string) => {
+      const actionManager = actionManagerRef.current;
+      if (actionManager) {
+        actionManager.playRandomAction(groupName);
+      } else {
+        // Fallback to old method
+        console.warn('ActionManager not available, falling back to simple random action');
+        playRandomAction();
+      }
+    }, [playRandomAction]);
+
+    const queueAction = useCallback((actionName: string, groupName?: string) => {
+      const actionManager = actionManagerRef.current;
+      if (actionManager) {
+        actionManager.queueAction(actionName, groupName);
+      } else {
+        // Fallback to direct action
+        const model = modelRef.current;
+        if (model && actionName) {
+          playAction(actionName);
+        }
+      }
+    }, [playAction]);
+
+    const stopAction = useCallback(() => {
+      const actionManager = actionManagerRef.current;
+      if (actionManager) {
+        actionManager.stopCurrentAction();
+      }
+    }, []);
+
+    const getActionStats = useCallback(() => {
+      const actionManager = actionManagerRef.current;
+      if (actionManager) {
+        return actionManager.getStats();
+      }
+      return {
+        isPlaying: false,
+        currentAction: undefined,
+        queueLength: 0,
+        availableGroups: [],
+        totalActions: 0,
+      };
+    }, []);
+
     const dispose = useCallback(() => {
       disposedRef.current = true;
+
+      // Clear mouse tracking interval
+      if (mouseTrackingIntervalRef.current) {
+        window.clearInterval(mouseTrackingIntervalRef.current);
+        mouseTrackingIntervalRef.current = null;
+      }
+
+      // Clear timers
+      const actionManager = actionManagerRef.current;
+      if (actionManager) {
+        actionManager.destroy();
+        actionManagerRef.current = null;
+      }
 
       const app = appRef.current;
       if (app) {
@@ -420,9 +704,22 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
         loadModel,
         playAction,
         playRandomAction,
+        playRandomActionFromGroup,
+        queueAction,
+        stopAction,
         dispose,
+        getActionStats,
       }),
-      [dispose, loadModel, playAction, playRandomAction]
+      [
+        dispose,
+        getActionStats,
+        loadModel,
+        playAction,
+        playRandomAction,
+        playRandomActionFromGroup,
+        queueAction,
+        stopAction,
+      ]
     );
 
     useEffect(() => {
