@@ -7,6 +7,8 @@ import React, {
   useState,
 } from 'react';
 import clsx from 'clsx';
+import { ActionManager } from '../lib/live2d/ActionManager';
+import { ActionState } from '../lib/live2d/ActionManager';
 
 export type Live2DLoadStage =
   | 'starting'
@@ -30,6 +32,10 @@ export type Live2DViewerHandle = {
   loadModel: (path: string) => Promise<void>;
   playAction: (actionName: string) => void;
   playRandomAction: () => void;
+  playRandomActionFromGroup: (groupName: string) => void;
+  queueAction: (actionName: string) => void;
+  stopAction: () => void;
+  getActionState: () => ActionState | null;
   dispose: () => void;
 };
 
@@ -40,6 +46,8 @@ export type Live2DViewerProps = {
   onLoadProgress?: (progress: Live2DLoadProgress) => void;
   onLoadComplete?: (path: string) => void;
   onLoadError?: (path: string, error: Error) => void;
+  onMouseMove?: (mouseX: number, mouseY: number) => void;
+  onMouseClick?: (mouseX: number, mouseY: number, hitTest: boolean) => void;
   className?: string;
   style?: React.CSSProperties;
 };
@@ -64,6 +72,8 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
       onLoadProgress,
       onLoadComplete,
       onLoadError,
+      onMouseMove,
+      onMouseClick,
       className,
       style,
     },
@@ -81,7 +91,40 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
     const loadTokenRef = useRef(0);
     const disposedRef = useRef(false);
 
+    // 动作管理器
+    const actionManagerRef = useRef<ActionManager | null>(null);
+    const mousePositionRef = useRef({ x: 0, y: 0 });
+    const lastMouseMoveTimeRef = useRef(0);
+    const lookAtTargetRef = useRef({ x: 0, y: 0 });
+
     const [isClickFlashing, setIsClickFlashing] = useState(false);
+    const [isLookingAtMouse, setIsLookingAtMouse] = useState(true);
+
+    // 初始化动作管理器
+    useEffect(() => {
+      actionManagerRef.current = new ActionManager({
+        autoPlayIdle: true,
+        idleInterval: 8000,
+        maxQueueSize: 5,
+        actionTimeout: 8000,
+      });
+
+      actionManagerRef.current.setCallbacks({
+        onActionStart: (actionName, state) => {
+          console.log('Action started:', actionName, state);
+        },
+        onActionComplete: (actionName, state) => {
+          console.log('Action completed:', actionName, state);
+        },
+        onError: (error) => {
+          console.error('Action manager error:', error);
+        }
+      });
+
+      return () => {
+        actionManagerRef.current?.dispose();
+      };
+    }, []);
 
     const fitModelToView = useCallback(() => {
       const container = containerRef.current;
@@ -115,6 +158,96 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
       model.pivot?.set?.(bounds.x + bounds.width / 2, bounds.y + bounds.height);
       model.position?.set?.(width / 2, height - padding);
     }, []);
+
+    // 鼠标移动跟踪和注视功能
+    const updateMouseLookAt = useCallback((mouseX: number, mouseY: number) => {
+      const model = modelRef.current;
+      if (!model || !isLookingAtMouse) return;
+
+      const container = containerRef.current;
+      if (!container) return;
+
+      const rect = container.getBoundingClientRect();
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+
+      // 计算相对鼠标位置 (-1 到 1)
+      const relativeX = (mouseX - centerX) / (rect.width / 2);
+      const relativeY = (mouseY - centerY) / (rect.height / 2);
+
+      // 限制范围
+      const clampedX = Math.max(-1, Math.min(1, relativeX));
+      const clampedY = Math.max(-1, Math.min(1, relativeY));
+
+      // 设置注视目标
+      lookAtTargetRef.current = { x: clampedX, y: clampedY };
+
+      try {
+        // Live2D 模型的眼睛和头部注视
+        if (model.lookAt) {
+          model.lookAt(clampedX * 0.5, clampedY * 0.3); // 减弱强度
+        }
+      } catch (error) {
+        console.warn('Failed to update mouse look at:', error);
+      }
+    }, [isLookingAtMouse]);
+
+    // 鼠标事件处理
+    const handleMouseMove = useCallback((event: MouseEvent) => {
+      const now = Date.now();
+      
+      // 限制更新频率，避免过于频繁
+      if (now - lastMouseMoveTimeRef.current < 50) return;
+      
+      lastMouseMoveTimeRef.current = now;
+      
+      mousePositionRef.current = { x: event.clientX, y: event.clientY };
+      updateMouseLookAt(event.clientX, event.clientY);
+      onMouseMove?.(event.clientX, event.clientY);
+    }, [updateMouseLookAt, onMouseMove]);
+
+    // 点击检测和动作触发
+    const handleMouseClick = useCallback((event: MouseEvent) => {
+      const model = modelRef.current;
+      const app = appRef.current;
+      if (!model || !app) return;
+
+      const view = app.view as HTMLCanvasElement;
+      const rect = view.getBoundingClientRect();
+      
+      // 计算点击位置是否在模型边界内
+      const clickX = event.clientX - rect.left;
+      const clickY = event.clientY - rect.top;
+      
+      let hitTest = false;
+      
+      try {
+        // 检查是否点击在模型上
+        if (model.hitTest) {
+          hitTest = model.hitTest(clickX, clickY);
+        } else {
+          // 备用方法：简单的边界检查
+          const modelBounds = model.getBounds();
+          hitTest = clickX >= modelBounds.x && 
+                   clickX <= modelBounds.x + modelBounds.width &&
+                   clickY >= modelBounds.y && 
+                   clickY <= modelBounds.y + modelBounds.height;
+        }
+      } catch (error) {
+        console.warn('Hit test failed:', error);
+        hitTest = true; // 如果检测失败，默认触发动作
+      }
+
+      // 触发点击反馈
+      if (hitTest) {
+        flashClick();
+        
+        // 使用动作管理器播放随机动作
+        actionManagerRef.current?.playRandomAction();
+      }
+
+      onMouseClick?.(event.clientX, event.clientY, hitTest);
+    }, [onMouseClick]);
 
     const destroyCurrentModel = useCallback(() => {
       const app = appRef.current;
@@ -354,10 +487,8 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
           model.buttonMode = true;
           model.cursor = 'pointer';
 
-          model.on?.('pointertap', () => {
-            flashClick();
-            playRandomAction();
-          });
+          // 设置模型引用到动作管理器
+          actionManagerRef.current?.setModel(model);
 
           tickerFnRef.current = () => {
             model.update?.(app.ticker.deltaMS);
@@ -391,6 +522,10 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
     const dispose = useCallback(() => {
       disposedRef.current = true;
 
+      // 移除鼠标事件监听
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('click', handleMouseClick);
+
       const app = appRef.current;
       if (app) {
         try {
@@ -412,7 +547,21 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
       if (container) {
         container.innerHTML = '';
       }
-    }, [destroyCurrentModel]);
+
+      // 清理动作管理器
+      actionManagerRef.current?.dispose();
+    }, [destroyCurrentModel, handleMouseMove, handleMouseClick]);
+
+    // 设置事件监听
+    useEffect(() => {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('click', handleMouseClick);
+
+      return () => {
+        document.removeEventListener('mousemove', handleMouseMove);
+        document.removeEventListener('click', handleMouseClick);
+      };
+    }, [handleMouseMove, handleMouseClick]);
 
     useImperativeHandle(
       ref,
@@ -420,9 +569,21 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
         loadModel,
         playAction,
         playRandomAction,
+        playRandomActionFromGroup: (groupName: string) => {
+          actionManagerRef.current?.playRandomActionFromGroup(groupName);
+        },
+        queueAction: (actionName: string) => {
+          actionManagerRef.current?.playAction(actionName);
+        },
+        stopAction: () => {
+          actionManagerRef.current?.stopAction();
+        },
+        getActionState: () => {
+          return actionManagerRef.current?.getState() || null;
+        },
         dispose,
       }),
-      [dispose, loadModel, playAction, playRandomAction]
+      [dispose, loadModel, playAction, playRandomAction, handleMouseMove, handleMouseClick]
     );
 
     useEffect(() => {
@@ -450,6 +611,13 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
         style={style}
       >
         <div ref={containerRef} className="absolute inset-0" />
+        
+        {/* 鼠标跟踪状态指示器 */}
+        {isLookingAtMouse && (
+          <div className="absolute top-2 right-2 bg-black/50 text-white text-xs px-2 py-1 rounded">
+            👁️ 注视中
+          </div>
+        )}
       </div>
     );
   }
