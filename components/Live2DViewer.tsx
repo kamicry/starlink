@@ -7,6 +7,8 @@ import React, {
   useState,
 } from 'react';
 import clsx from 'clsx';
+import { parseModelConfig, Live2DModelConfig, getAvailableMotionGroups, getAvailableExpressions } from '../lib/live2d/model-parser';
+import { loadEmotionMapping, EmotionMapping, getExpressionForEmotion, getMotionForEmotion } from '../lib/live2d/emotion-mapping';
 
 export type Live2DLoadStage =
   | 'starting'
@@ -30,6 +32,10 @@ export type Live2DViewerHandle = {
   loadModel: (path: string) => Promise<void>;
   playAction: (actionName: string) => void;
   playRandomAction: () => void;
+  playExpression: (expressionName: string) => void;
+  setEmotion: (emotion: string) => void;
+  getModelConfig: () => Live2DModelConfig | null;
+  getEmotionMapping: () => EmotionMapping | null;
   dispose: () => void;
 };
 
@@ -82,6 +88,10 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
     const disposedRef = useRef(false);
 
     const [isClickFlashing, setIsClickFlashing] = useState(false);
+    const [modelConfig, setModelConfig] = useState<Live2DModelConfig | null>(null);
+    const [emotionMapping, setEmotionMapping] = useState<EmotionMapping | null>(null);
+    const [currentEmotion, setCurrentEmotion] = useState<string>('neutral');
+    const [configError, setConfigError] = useState<string | null>(null);
 
     const fitModelToView = useCallback(() => {
       const container = containerRef.current;
@@ -236,6 +246,63 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
       [onAction]
     );
 
+    // 播放表情
+    const playExpression = useCallback(
+      (expressionName: string) => {
+        const model = modelRef.current;
+        if (!model || !emotionMapping) return;
+
+        try {
+          // 检查表情是否存在
+          if (!emotionMapping.expressions[expressionName]) {
+            console.warn(`Expression not found: ${expressionName}`);
+            return;
+          }
+
+          // 使用 Live2D 模型的表情功能
+          if (typeof model.setExpression === 'function') {
+            model.setExpression(expressionName);
+          } else if (model.internalModel?.expressionManager?.setExpression) {
+            model.internalModel.expressionManager.setExpression(expressionName);
+          } else {
+            console.warn('Expression functionality not available in this model');
+          }
+
+          console.log(`🎭 Playing expression: ${expressionName}`);
+        } catch (error) {
+          console.error('Failed to play Live2D expression:', expressionName, error);
+        }
+      },
+      [emotionMapping]
+    );
+
+    // 设置情绪（自动映射到表情和动作）
+    const setEmotion = useCallback(
+      (emotion: string) => {
+        if (!emotionMapping) return;
+
+        const normalizedEmotion = emotion.toLowerCase().trim();
+        setCurrentEmotion(normalizedEmotion);
+
+        // 获取对应的表情和动作
+        const expression = getExpressionForEmotion(emotionMapping, normalizedEmotion);
+        const motion = getMotionForEmotion(emotionMapping, normalizedEmotion);
+
+        // 播放表情
+        if (expression && emotionMapping.expressions[expression]) {
+          playExpression(expression);
+        }
+
+        // 播放动作（如果有对应的动作）
+        if (motion && emotionMapping.motions[motion] !== undefined) {
+          playAction(motion);
+        }
+
+        console.log(`😊 Emotion set: ${normalizedEmotion} -> expression: ${expression}, motion: ${motion}`);
+      },
+      [emotionMapping, playExpression, playAction]
+    );
+
     const getAvailableMotionGroups = useCallback((): string[] => {
       const model = modelRef.current;
       if (!model) return [];
@@ -268,6 +335,29 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
       window.setTimeout(() => setIsClickFlashing(false), CLICK_FLASH_MS);
     }, []);
 
+    // 加载模型配置和情绪映射
+    const loadModelConfig = useCallback(async (modelPath: string) => {
+      try {
+        console.log('🔄 开始解析 Live2D 模型配置...');
+        setConfigError(null);
+        
+        // 解析模型配置
+        const config = await parseModelConfig(modelPath);
+        setModelConfig(config);
+        
+        // 加载情绪映射
+        const mapping = await loadEmotionMapping(modelPath);
+        setEmotionMapping(mapping);
+        
+        console.log('✅ 模型配置和情绪映射加载成功');
+        return true;
+      } catch (error) {
+        console.error('❌ 加载模型配置失败:', error);
+        setConfigError(error instanceof Error ? error.message : 'Unknown error');
+        return false;
+      }
+    }, []);
+
     const loadModel = useCallback(
       async (path: string) => {
         if (!path) return;
@@ -286,6 +376,12 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
         try {
           onLoadStart?.(path);
           notifyProgress(0, 'starting');
+
+          // 首先加载模型配置
+          const configLoaded = await loadModelConfig(path);
+          if (!configLoaded || disposedRef.current || token !== loadTokenRef.current) {
+            return;
+          }
 
           await ensurePixiApp();
           if (disposedRef.current || token !== loadTokenRef.current) return;
@@ -420,9 +516,13 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
         loadModel,
         playAction,
         playRandomAction,
+        playExpression,
+        setEmotion,
+        getModelConfig: () => modelConfig,
+        getEmotionMapping: () => emotionMapping,
         dispose,
       }),
-      [dispose, loadModel, playAction, playRandomAction]
+      [dispose, loadModel, playAction, playRandomAction, playExpression, setEmotion, modelConfig, emotionMapping]
     );
 
     useEffect(() => {
@@ -450,6 +550,36 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
         style={style}
       >
         <div ref={containerRef} className="absolute inset-0" />
+        
+        {/* 调试信息显示（仅开发环境） */}
+        {process.env.NODE_ENV === 'development' && (
+          <div className="absolute top-2 left-2 bg-black/70 text-white p-2 rounded text-xs font-mono z-10 max-w-sm">
+            {configError && (
+              <div className="text-red-400 mb-2">
+                ❌ Config Error: {configError}
+              </div>
+            )}
+            
+            {modelConfig && (
+              <div className="space-y-1">
+                <div className="text-green-400 font-semibold">✅ Model Config</div>
+                <div>Motions: {Object.keys(modelConfig.motions).join(', ') || 'None'}</div>
+                <div>Expressions: {Object.keys(modelConfig.expressions).join(', ') || 'None'}</div>
+                <div>Physics: {modelConfig.hasPhysics ? 'Yes' : 'No'}</div>
+                <div>Hit Areas: {modelConfig.hitAreas.join(', ') || 'None'}</div>
+                <div>Version: {modelConfig.version}</div>
+              </div>
+            )}
+            
+            {emotionMapping && (
+              <div className="space-y-1 mt-2">
+                <div className="text-blue-400 font-semibold">🎭 Emotion Mapping</div>
+                <div>Current: {currentEmotion}</div>
+                <div>Mappings: {Object.keys(emotionMapping.emotionToExpression).length}</div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     );
   }
