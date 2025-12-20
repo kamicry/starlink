@@ -183,9 +183,32 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
       lookAtTargetRef.current = { x: clampedX, y: clampedY };
 
       try {
-        // Live2D 模型的眼睛和头部注视
+        // 尝试多种方法来设置注视
         if (model.lookAt) {
-          model.lookAt(clampedX * 0.5, clampedY * 0.3); // 减弱强度
+          // 方法1: 如果模型有 lookAt 方法
+          model.lookAt(clampedX * 0.5, clampedY * 0.3);
+          console.log('Using model.lookAt method');
+        } else if (model.internalModel?.coreModel?.setParameterValueById) {
+          // 方法2: 直接设置参数
+          const angleX = clampedX * 0.3; // 角度X参数
+          const angleY = clampedY * 0.2; // 角度Y参数
+          
+          model.internalModel.coreModel.setParameterValueById('ParamAngleX', angleX);
+          model.internalModel.coreModel.setParameterValueById('ParamAngleY', angleY);
+          
+          console.log('Setting parameters directly:', { angleX, angleY });
+        } else if (model.internalModel?.settings?.params) {
+          // 方法3: 通过内部设置参数
+          const params = model.internalModel.settings.params;
+          if (params.ParamAngleX !== undefined) {
+            params.ParamAngleX.value = clampedX * 0.3;
+          }
+          if (params.ParamAngleY !== undefined) {
+            params.ParamAngleY.value = clampedY * 0.2;
+          }
+          console.log('Updated internal parameters');
+        } else {
+          console.warn('No method available to set look-at parameters');
         }
       } catch (error) {
         console.warn('Failed to update mouse look at:', error);
@@ -351,17 +374,99 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
 
         try {
           onAction?.(actionName);
+          
+          console.log(`Attempting to play action: ${actionName}`);
 
+          // 方法1: 尝试使用标准动作播放
           if (typeof model.motion === 'function') {
             model.motion(actionName);
+            console.log(`Using model.motion for ${actionName}`);
             return;
           }
 
+          // 方法2: 通过动作管理器播放
           const internal = model.internalModel;
           const motionManager = internal?.motionManager;
           if (motionManager?.startMotion) {
             motionManager.startMotion(actionName, 0);
+            console.log(`Using motionManager.startMotion for ${actionName}`);
+            return;
           }
+
+          // 方法3: 如果是表达式动作，切换表达式
+          if (actionName.startsWith('Expression_')) {
+            const expressionName = actionName.replace('Expression_', '');
+            if (typeof model.setExpression === 'function') {
+              model.setExpression(expressionName);
+              console.log(`Set expression: ${expressionName}`);
+              return;
+            }
+          }
+
+          // 方法4: 参数控制 - 基于动作名称设置相应参数
+          console.log(`No motion found, using parameter control for: ${actionName}`);
+          
+          // 根据动作名称设置不同的参数组合
+          switch (actionName) {
+            case 'Idle':
+              // 回到默认状态
+              setParameter(model, 'ParamAngleX', 0);
+              setParameter(model, 'ParamAngleY', 0);
+              setParameter(model, 'ParamAngleZ', 0);
+              setParameter(model, 'ParamEyeLOpen', 1);
+              setParameter(model, 'ParamEyeROpen', 1);
+              break;
+              
+            case 'TapBody':
+            case 'TapHead':
+            case 'TapArm':
+              // 点击动作 - 轻微的倾斜和眨眼
+              setParameter(model, 'ParamAngleZ', Math.random() * 0.3 - 0.15);
+              setParameter(model, 'ParamEyeLOpen', 0.7);
+              setParameter(model, 'ParamEyeROpen', 0.7);
+              
+              // 3秒后回到正常状态
+              setTimeout(() => {
+                setParameter(model, 'ParamAngleZ', 0);
+                setParameter(model, 'ParamEyeLOpen', 1);
+                setParameter(model, 'ParamEyeROpen', 1);
+              }, 3000);
+              break;
+              
+            case 'Happy':
+              // 开心表情
+              setParameter(model, 'Param3', 0.8); // 笑脸
+              setParameter(model, 'ParamAngleX', 0.1);
+              break;
+              
+            case 'Angry':
+              // 生气表情
+              setParameter(model, 'Param3', -0.8); // 怒脸
+              setParameter(model, 'ParamAngleX', -0.1);
+              break;
+              
+            case 'Sad':
+              // 伤心表情
+              setParameter(model, 'Param3', -0.5); // 哭脸
+              setParameter(model, 'ParamAngleY', -0.2);
+              break;
+              
+            case 'Wink':
+              // 眨眼动作
+              setParameter(model, 'ParamEyeROpen', 0.1);
+              setTimeout(() => {
+                setParameter(model, 'ParamEyeROpen', 1);
+              }, 1000);
+              break;
+              
+            default:
+              // 随机参数变化
+              setParameter(model, 'ParamAngleX', (Math.random() - 0.5) * 0.4);
+              setParameter(model, 'ParamAngleY', (Math.random() - 0.5) * 0.3);
+              console.log(`Random parameter animation for: ${actionName}`);
+              break;
+          }
+          
         } catch (error) {
           console.error('Failed to play Live2D action:', actionName, error);
         }
@@ -369,23 +474,61 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
       [onAction]
     );
 
+    // 辅助函数：安全地设置模型参数
+    const setParameter = useCallback((model: any, paramName: string, value: number) => {
+      try {
+        // 方法1: 通过 coreModel
+        if (model.internalModel?.coreModel?.setParameterValueById) {
+          model.internalModel.coreModel.setParameterValueById(paramName, value);
+        }
+        // 方法2: 通过内部参数
+        else if (model.internalModel?.settings?.params?.[paramName]) {
+          model.internalModel.settings.params[paramName].value = value;
+        }
+        // 方法3: 直接访问参数
+        else if (model[paramName] !== undefined) {
+          model[paramName] = value;
+        }
+      } catch (error) {
+        console.warn(`Failed to set parameter ${paramName}:`, error);
+      }
+    }, []);
+
     const getAvailableMotionGroups = useCallback((): string[] => {
       const model = modelRef.current;
       if (!model) return [];
 
+      // 检查模型是否有实际的动作数据
       const fromSettings = model.internalModel?.settings?.motions;
       if (fromSettings && typeof fromSettings === 'object') {
         const keys = Object.keys(fromSettings);
-        if (keys.length > 0) return keys;
+        if (keys.length > 0) {
+          console.log('Found motion groups from settings:', keys);
+          return keys;
+        }
       }
 
       const fromMotionManager = model.internalModel?.motionManager?.motionGroups;
       if (fromMotionManager && typeof fromMotionManager === 'object') {
         const keys = Object.keys(fromMotionManager);
-        if (keys.length > 0) return keys;
+        if (keys.length > 0) {
+          console.log('Found motion groups from motion manager:', keys);
+          return keys;
+        }
       }
 
-      return ['Idle', 'TapBody', 'TapHead'];
+      // 如果没有找到动作，检查是否有表达式文件
+      const expressions = model.internalModel?.settings?.expressions;
+      if (expressions && typeof expressions === 'object') {
+        const keys = Object.keys(expressions);
+        if (keys.length > 0) {
+          console.log('Found expression groups:', keys);
+          return keys.map(key => `Expression_${key}`);
+        }
+      }
+
+      console.log('No motion or expression data found, model uses parameter control');
+      return []; // 没有预定义动作，返回空数组
     }, []);
 
     const playRandomAction = useCallback(() => {
@@ -618,6 +761,17 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
             👁️ 注视中
           </div>
         )}
+
+        {/* 调试信息面板 */}
+        <div className="absolute top-2 left-2 bg-black/70 text-white text-xs p-2 rounded max-w-xs font-mono">
+          <div className="text-xs font-bold mb-1">🔧 调试信息</div>
+          <div className="space-y-1">
+            <div>鼠标位置: ({mousePositionRef.current.x.toFixed(0)}, {mousePositionRef.current.y.toFixed(0)})</div>
+            <div>注视目标: ({lookAtTargetRef.current.x.toFixed(2)}, {lookAtTargetRef.current.y.toFixed(2)})</div>
+            <div>模型状态: {modelRef.current ? '已加载' : '未加载'}</div>
+            <div>注视模式: {isLookingAtMouse ? '开启' : '关闭'}</div>
+          </div>
+        </div>
       </div>
     );
   }

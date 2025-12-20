@@ -75,10 +75,14 @@ export class ActionManager {
     this.availableActions.clear();
     
     try {
+      console.log('=== 更新可用动作列表 ===');
+      
       // 从模型内部获取可用动作
       const fromSettings = this.model.internalModel?.settings?.motions;
       if (fromSettings && typeof fromSettings === 'object') {
-        Object.keys(fromSettings).forEach(actionName => {
+        const keys = Object.keys(fromSettings);
+        console.log('从settings.motions找到动作:', keys);
+        keys.forEach(actionName => {
           this.availableActions.add(actionName);
         });
       }
@@ -86,17 +90,37 @@ export class ActionManager {
       // 从动作管理器获取
       const fromMotionManager = this.model.internalModel?.motionManager?.motionGroups;
       if (fromMotionManager && typeof fromMotionManager === 'object') {
-        Object.keys(fromMotionManager).forEach(actionName => {
+        const keys = Object.keys(fromMotionManager);
+        console.log('从motionManager.motionGroups找到动作:', keys);
+        keys.forEach(actionName => {
           this.availableActions.add(actionName);
         });
       }
 
-      // 如果没有获取到任何动作，添加默认动作
+      // 检查是否有表达式文件
+      const expressions = this.model.internalModel?.settings?.expressions;
+      if (expressions && typeof expressions === 'object') {
+        const keys = Object.keys(expressions);
+        console.log('找到表达式:', keys);
+        // 添加表达式作为可用动作
+        keys.forEach(expressionName => {
+          this.availableActions.add(`Expression_${expressionName}`);
+        });
+      }
+
+      // 如果没有获取到任何动作，添加参数控制动作
       if (this.availableActions.size === 0) {
+        console.log('没有找到预定义动作，使用参数控制动作');
         this.availableActions.add('Idle');
         this.availableActions.add('TapBody');
         this.availableActions.add('TapHead');
+        this.availableActions.add('Happy');
+        this.availableActions.add('Angry');
+        this.availableActions.add('Sad');
+        this.availableActions.add('Wink');
       }
+
+      console.log('最终可用动作列表:', Array.from(this.availableActions));
     } catch (error) {
       console.warn('Failed to update available actions:', error);
       // 添加默认动作作为兜底
