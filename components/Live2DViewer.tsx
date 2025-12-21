@@ -8,6 +8,8 @@ import React, {
 } from 'react';
 import clsx from 'clsx';
 import { DragManager } from '../lib/live2d/drag-manager';
+import { ScaleManager } from '../lib/live2d/scale-manager';
+import { LockManager, LockConfig } from '../lib/live2d/lock-manager';
 
 export type Live2DLoadStage =
   | 'starting'
@@ -31,11 +33,14 @@ export type Live2DViewerHandle = {
   loadModel: (path: string) => Promise<void>;
   playAction: (actionName: string) => void;
   playRandomAction: () => void;
-  zoomIn: () => void;
-  zoomOut: () => void;
+  zoomIn: (centerX?: number, centerY?: number) => void;
+  zoomOut: (centerX?: number, centerY?: number) => void;
   resetZoom: () => void;
+  setScale: (scale: number, centerX?: number, centerY?: number) => void;
+  getScale: () => number;
   lock: () => void;
   unlock: () => void;
+  lockManager: LockManager | null;
   dispose: () => void;
 };
 
@@ -87,17 +92,36 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
     const loadTokenRef = useRef(0);
     const disposedRef = useRef(false);
     const dragManagerRef = useRef<DragManager | null>(null);
+    const scaleManagerRef = useRef<ScaleManager | null>(null);
+    const lockManagerRef = useRef<LockManager | null>(null);
 
     const [isClickFlashing, setIsClickFlashing] = useState(false);
     const [isLocked, setIsLocked] = useState(false);
     const [currentScale, setCurrentScale] = useState(1);
-    const [baseScale, setBaseScale] = useState(1);
+    const [lockStatus, setLockStatus] = useState<LockConfig>({
+      lockAll: false
+    });
+    const [toast, setToast] = useState<{
+      message: string;
+      type: 'info' | 'warning' | 'error';
+      visible: boolean;
+    }>({ message: '', type: 'info', visible: false });
+
+    // Toast显示函数
+    const showToast = useCallback((message: string, type: 'info' | 'warning' | 'error' = 'info', duration = 2000) => {
+      setToast({ message, type, visible: true });
+      setTimeout(() => {
+        setToast(prev => ({ ...prev, visible: false }));
+      }, duration);
+    }, []);
 
     const fitModelToView = useCallback(() => {
       const container = containerRef.current;
       const app = appRef.current;
       const model = modelRef.current;
       const dragManager = dragManagerRef.current;
+      const scaleManager = scaleManagerRef.current;
+      const lockManager = lockManagerRef.current;
       
       if (!container || !app || !model) return;
 
@@ -121,13 +145,6 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
       );
 
       if (Number.isFinite(baseFitScale) && baseFitScale > 0) {
-        // Set base scale for zoom calculations
-        if (baseScale === 1) {
-          setBaseScale(baseFitScale);
-        }
-        
-        const finalScale = isLocked ? currentScale : baseFitScale * currentScale;
-        model.scale?.set?.(finalScale, finalScale);
         model.pivot?.set?.(bounds.x + bounds.width / 2, bounds.y + bounds.height);
         
         // Initialize drag manager position if not yet initialized
@@ -141,8 +158,23 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
         if ((!dragManager || !dragManager.isDraggingNow()) && !isLocked) {
           model.position?.set?.(width / 2, height - padding);
         }
+        
+        // Update scale using ScaleManager if available
+        if (scaleManager) {
+          // 只有在缩放功能未被禁用时才应用缩放
+          if (scaleManager.isEnabled()) {
+            const finalScale = isLocked ? scaleManager.getScale() : baseFitScale * scaleManager.getScale();
+            // Stop any ongoing animation and apply final scale
+            scaleManager.stopAnimation();
+            scaleManager.setScale(finalScale / baseFitScale);
+          }
+        } else {
+          // Fallback: direct scale application
+          const finalScale = isLocked ? currentScale : baseFitScale * currentScale;
+          model.scale?.set?.(finalScale, finalScale);
+        }
       }
-    }, [baseScale, currentScale, isLocked]);
+    }, [currentScale, isLocked]);
 
     const destroyCurrentModel = useCallback(() => {
       const app = appRef.current;
@@ -162,41 +194,113 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
         // ignore
       } finally {
         modelRef.current = null;
-        setBaseScale(1); // Reset base scale when model is destroyed
       }
     }, []);
 
-    // Zoom and Lock functionality
-    const zoomIn = useCallback(() => {
-      setCurrentScale(prev => Math.min(prev * 1.2, 5)); // Max zoom 5x
-      fitModelToView();
+    // Zoom and Lock functionality using ScaleManager
+    const zoomIn = useCallback((centerX?: number, centerY?: number) => {
+      if (scaleManagerRef.current) {
+        scaleManagerRef.current.zoomIn(centerX, centerY);
+      } else {
+        setCurrentScale(prev => Math.min(prev * 1.2, 2.5));
+        fitModelToView();
+      }
     }, [fitModelToView]);
 
-    const zoomOut = useCallback(() => {
-      setCurrentScale(prev => Math.max(prev * 0.8, 0.2)); // Min zoom 0.2x
-      fitModelToView();
+    const zoomOut = useCallback((centerX?: number, centerY?: number) => {
+      if (scaleManagerRef.current) {
+        scaleManagerRef.current.zoomOut(centerX, centerY);
+      } else {
+        setCurrentScale(prev => Math.max(prev * 0.8, 0.5));
+        fitModelToView();
+      }
     }, [fitModelToView]);
 
     const resetZoom = useCallback(() => {
-      setCurrentScale(1);
-      fitModelToView();
+      if (scaleManagerRef.current) {
+        scaleManagerRef.current.reset();
+      } else {
+        setCurrentScale(1);
+        fitModelToView();
+      }
     }, [fitModelToView]);
 
-    const lock = useCallback(() => {
-      setIsLocked(true);
-      if (dragManagerRef.current) {
-        dragManagerRef.current.disable();
+    const setScale = useCallback((scale: number, centerX?: number, centerY?: number) => {
+      if (scaleManagerRef.current) {
+        scaleManagerRef.current.setScale(scale, centerX, centerY);
+      } else {
+        setCurrentScale(scale);
+        fitModelToView();
       }
-      fitModelToView();
     }, [fitModelToView]);
 
-    const unlock = useCallback(() => {
-      setIsLocked(false);
-      if (dragManagerRef.current) {
-        dragManagerRef.current.enable();
+    const getScale = useCallback(() => {
+      if (scaleManagerRef.current) {
+        return scaleManagerRef.current.getScale();
       }
-      fitModelToView();
-    }, [fitModelToView]);
+      return currentScale;
+    }, [currentScale]);
+
+    // Mouse wheel zoom handler
+    const handleWheel = useCallback((event: WheelEvent) => {
+      if (!scaleManagerRef.current || !appRef.current?.view) return;
+      
+      // Prevent default to stop page scrolling
+      event.preventDefault();
+      
+      // Get mouse position relative to canvas
+      const rect = appRef.current.view.getBoundingClientRect();
+      const mouseX = event.clientX - rect.left;
+      const mouseY = event.clientY - rect.top;
+      
+      // Determine zoom direction based on wheel delta
+      if (event.deltaY < 0) {
+        scaleManagerRef.current.zoomIn(mouseX, mouseY);
+      } else {
+        scaleManagerRef.current.zoomOut(mouseX, mouseY);
+      }
+    }, []);
+
+    // Keyboard shortcut handler
+    const handleKeyDown = useCallback((event: KeyboardEvent) => {
+      // Handle locking/unlocking shortcuts first (always available)
+      if (lockManagerRef.current) {
+        const key = event.key.toLowerCase();
+        
+        // L key: toggle all locks
+        if (key === 'l') {
+          event.preventDefault();
+          lockManagerRef.current.toggle();
+          return;
+        }
+      }
+      
+      // Handle zoom shortcuts (always enabled when canvas is available)
+      if (scaleManagerRef.current && appRef.current?.view) {
+        // Handle +/- keys for zoom
+        if (event.key === '+' || event.key === '=') {
+          event.preventDefault();
+          const rect = appRef.current.view.getBoundingClientRect();
+          const centerX = rect.width / 2;
+          const centerY = rect.height / 2;
+          scaleManagerRef.current.zoomIn(centerX, centerY);
+        } else if (event.key === '-' || event.key === '_') {
+          event.preventDefault();
+          const rect = appRef.current.view.getBoundingClientRect();
+          const centerX = rect.width / 2;
+          const centerY = rect.height / 2;
+          scaleManagerRef.current.zoomOut(centerX, centerY);
+        }
+        
+        // Handle Ctrl+0 for reset
+        if (event.key === '0' && (event.ctrlKey || event.metaKey)) {
+          event.preventDefault();
+          scaleManagerRef.current.reset();
+        }
+      }
+    }, []);
+
+
 
     const ensurePixiApp = useCallback(async () => {
       if (disposedRef.current) return;
@@ -414,7 +518,7 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
           model.interactive = true;
           model.buttonMode = true;
 
-          // Initialize drag manager
+          // Initialize drag manager and scale manager
           if (app.view && model) {
             dragManagerRef.current = new DragManager(
               app.view as HTMLCanvasElement,
@@ -425,6 +529,47 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
                 cursor: isLocked ? 'default' : 'grab'
               }
             );
+
+            // Initialize scale manager
+            scaleManagerRef.current = new ScaleManager(model, {
+              enabled: true,
+              minScale: 0.1,
+              maxScale: 2.5,
+              initialScale: 0.2,
+              scaleStep: 0.02,
+              smoothing: true,
+              smoothDuration: 200
+            });
+
+            // Initialize lock manager
+            if (dragManagerRef.current && scaleManagerRef.current) {
+              lockManagerRef.current = new LockManager(
+                dragManagerRef.current,
+                scaleManagerRef.current,
+                {
+                  lockAll: lockStatus.lockAll
+                }
+              );
+
+              // 设置提示函数
+              lockManagerRef.current.setToastFunction(showToast);
+
+              // 添加锁定状态变化回调
+              lockManagerRef.current.addLockStatusCallback((status) => {
+                setLockStatus(status);
+                setIsLocked(status.lockAll || false);
+              });
+
+              // 立即同步当前锁定状态
+              const currentStatus = lockManagerRef.current.getStatus();
+              setLockStatus(currentStatus);
+              setIsLocked(currentStatus.lockAll || false);
+            }
+
+            // Add scale change callback to update UI
+            scaleManagerRef.current.addScaleChangeCallback((scale) => {
+              setCurrentScale(scale);
+            });
           }
 
           model.on?.('pointertap', () => {
@@ -481,6 +626,12 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
         }
       }
 
+      // Clean up scale manager
+      if (scaleManagerRef.current) {
+        scaleManagerRef.current.destroy();
+        scaleManagerRef.current = null;
+      }
+
       appRef.current = null;
       pixiRef.current = null;
       initPromiseRef.current = null;
@@ -500,19 +651,35 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
         zoomIn,
         zoomOut,
         resetZoom,
-        lock,
-        unlock,
+        setScale,
+        getScale,
+        lock: () => lockManagerRef.current?.lockAll(),
+        unlock: () => lockManagerRef.current?.unlockAll(),
+        lockManager: lockManagerRef.current,
         dispose,
       }),
-      [dispose, loadModel, playAction, playRandomAction, zoomIn, zoomOut, resetZoom, lock, unlock]
+      [dispose, loadModel, playAction, playRandomAction, zoomIn, zoomOut, resetZoom, setScale, getScale]
     );
 
     useEffect(() => {
       disposedRef.current = false;
+      
+      // Add event listeners for zoom functionality
+      const canvas = appRef.current?.view as HTMLCanvasElement;
+      if (canvas) {
+        canvas.addEventListener('wheel', handleWheel, { passive: false });
+        document.addEventListener('keydown', handleKeyDown);
+      }
+      
       return () => {
+        // Clean up event listeners
+        if (canvas) {
+          canvas.removeEventListener('wheel', handleWheel);
+        }
+        document.removeEventListener('keydown', handleKeyDown);
         dispose();
       };
-    }, [dispose]);
+    }, [dispose, handleWheel, handleKeyDown]);
 
     useEffect(() => {
       if (!modelPath) return;
@@ -527,11 +694,47 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
         className={clsx(
           'relative h-full w-full overflow-hidden',
           isClickFlashing && 'ring-2 ring-blue-500 ring-offset-2 ring-offset-transparent',
+          // 根据锁定状态设置鼠标光标
+          lockStatus.lockAll && 'cursor-not-allowed',
+          !lockStatus.lockAll && 'cursor-grab',
+          !lockStatus.lockAll && 'cursor-grabbing',
           className
         )}
         style={style}
       >
         <div ref={containerRef} className="absolute inset-0" />
+        
+        {/* 简单锁定按钮 */}
+        {lockManagerRef.current && (
+          <div className="absolute right-3 top-40 z-10">
+            <button 
+              onClick={() => lockManagerRef.current?.toggle()}
+              className={clsx(
+                'text-sm py-2 px-3 rounded-lg transition-colors flex items-center gap-2 shadow-md',
+                lockStatus.lockAll 
+                  ? 'bg-red-500 text-white hover:bg-red-600' 
+                  : 'bg-white/90 text-gray-700 hover:bg-white/95'
+              )}
+              title={lockStatus.lockAll ? '点击解锁拖动和缩放' : '点击锁定拖动和缩放'}
+            >
+              {lockStatus.lockAll ? '🔒 已锁定' : '🔓 已解锁'}
+            </button>
+          </div>
+        )}
+        
+        {/* Toast提示组件 */}
+        {toast.visible && (
+          <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-50">
+            <div className={clsx(
+              'px-4 py-2 rounded-lg shadow-lg text-white text-sm font-medium max-w-sm text-center',
+              toast.type === 'error' && 'bg-red-500',
+              toast.type === 'warning' && 'bg-yellow-500',
+              toast.type === 'info' && 'bg-blue-500'
+            )}>
+              {toast.message}
+            </div>
+          </div>
+        )}
       </div>
     );
   }

@@ -1,6 +1,6 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState, useEffect } from 'react';
 import clsx from 'clsx';
-import { AlertCircle, Loader2, RefreshCw, ZoomIn, ZoomOut, RotateCcw, Lock, Unlock } from 'lucide-react';
+import { AlertCircle, Loader2, RefreshCw, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
 import Live2DViewer, { Live2DLoadProgress, Live2DViewerHandle } from './Live2DViewer';
 
 export type Live2DModelPanelProps = {
@@ -30,7 +30,7 @@ export default function Live2DModelPanel({ defaultModelPath, className }: Live2D
   const [loadStage, setLoadStage] = useState<string>('');
   const [loadError, setLoadError] = useState<string | null>(null);
   const [lastAction, setLastAction] = useState<string | null>(null);
-  const [isLocked, setIsLocked] = useState(false);
+  const [currentScale, setCurrentScale] = useState(1.0);
 
   const triggerLoad = useCallback(async () => {
     const path = inputPath.trim();
@@ -77,6 +77,24 @@ export default function Live2DModelPanel({ defaultModelPath, className }: Live2D
     window.setTimeout(() => setLastAction(null), 1500);
   }, []);
 
+  // Update scale display periodically
+  useEffect(() => {
+    const updateScale = () => {
+      if (viewerRef.current) {
+        const scale = viewerRef.current.getScale();
+        setCurrentScale(scale);
+      }
+    };
+
+    // Update scale immediately
+    updateScale();
+
+    // Set up interval to update scale
+    const interval = setInterval(updateScale, 100);
+
+    return () => clearInterval(interval);
+  }, []);
+
   return (
     <div
       className={clsx(
@@ -113,7 +131,7 @@ export default function Live2DModelPanel({ defaultModelPath, className }: Live2D
         </button>
       </div>
 
-      <div className="absolute right-3 top-3 flex gap-2">
+      <div className="absolute right-3 top-16 flex gap-2">
         <button
           onClick={() => {
             viewerRef.current?.zoomIn();
@@ -141,23 +159,11 @@ export default function Live2DModelPanel({ defaultModelPath, className }: Live2D
         >
           <RotateCcw size={16} />
         </button>
-        <button
-          onClick={() => {
-            if (isLocked) {
-              viewerRef.current?.unlock();
-            } else {
-              viewerRef.current?.lock();
-            }
-            setIsLocked(!isLocked);
-          }}
-          className={clsx(
-            "rounded-full p-1.5 shadow-sm transition-colors",
-            isLocked ? "bg-red-100 hover:bg-red-200" : "bg-white/80 hover:bg-white"
-          )}
-          title={isLocked ? "解锁" : "锁定"}
-        >
-          {isLocked ? <Unlock size={16} /> : <Lock size={16} />}
-        </button>
+      </div>
+
+      {/* Scale percentage display */}
+      <div className="absolute right-3 top-28 bg-white/90 backdrop-blur-sm rounded-lg px-3 py-2 text-sm font-medium text-gray-700 shadow-sm">
+        {Math.round(currentScale * 100)}%
       </div>
 
       {(loadStatus === 'loading' || loadStatus === 'error') && (
