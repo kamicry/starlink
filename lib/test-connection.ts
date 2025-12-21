@@ -28,7 +28,7 @@ export async function testQwenConnection(apiKey: string): Promise<ConnectionTest
     
     // 创建 WebSocket 连接
     const url = new URL('wss://dashscope.aliyuncs.com/api-ws/v1/realtime');
-    url.searchParams.set('model', 'qwen3-omni-turbo-realtime');
+    url.searchParams.set('model', 'qwen-omni-turbo-realtime');
     url.searchParams.set('api_key', apiKey);
 
     const ws = new WebSocket(url.toString());
