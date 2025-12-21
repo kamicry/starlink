@@ -7,6 +7,7 @@ import React, {
   useState,
 } from 'react';
 import clsx from 'clsx';
+import { ScaleManager, createScaleManager } from '@/lib/live2d/scale-manager';
 
 export type Live2DLoadStage =
   | 'starting'
@@ -80,6 +81,7 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
     const pixiRef = useRef<any>(null);
     const modelRef = useRef<Live2DModelInstance | null>(null);
     const tickerFnRef = useRef<((delta: number) => void) | null>(null);
+    const scaleManagerRef = useRef<ScaleManager | null>(null);
 
     const initPromiseRef = useRef<Promise<void> | null>(null);
     const resizeObserverRef = useRef<ResizeObserver | null>(null);
@@ -231,19 +233,16 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
 
     // Zoom and Lock functionality
     const zoomIn = useCallback(() => {
-      setCurrentScale(prev => Math.min(prev * 1.2, 5)); // Max zoom 5x
-      fitModelToView();
-    }, [fitModelToView]);
+      scaleManagerRef.current?.zoomIn();
+    }, []);
 
     const zoomOut = useCallback(() => {
-      setCurrentScale(prev => Math.max(prev * 0.8, 0.2)); // Min zoom 0.2x
-      fitModelToView();
-    }, [fitModelToView]);
+      scaleManagerRef.current?.zoomOut();
+    }, []);
 
     const resetZoom = useCallback(() => {
-      setCurrentScale(1);
-      fitModelToView();
-    }, [fitModelToView]);
+      scaleManagerRef.current?.reset();
+    }, []);
 
     const lock = useCallback(() => {
       setIsLocked(true);
@@ -494,6 +493,27 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
           };
           app.ticker.add(tickerFnRef.current);
 
+          // Initialize ScaleManager
+          if (scaleManagerRef.current) {
+            scaleManagerRef.current.dispose();
+          }
+          scaleManagerRef.current = createScaleManager(
+            {
+              minScale: 0.5,
+              maxScale: 2.5,
+              initialScale: 1.0,
+              scaleStep: 0.1,
+              smoothing: true,
+              smoothDuration: 200,
+            },
+            {
+              onScaleChange: (scale) => {
+                setCurrentScale(scale);
+                fitModelToView();
+              },
+            }
+          );
+
           fitModelToView();
 
           notifyProgress(100, 'ready');
@@ -520,6 +540,12 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
 
     const dispose = useCallback(() => {
       disposedRef.current = true;
+
+      // Dispose ScaleManager
+      if (scaleManagerRef.current) {
+        scaleManagerRef.current.dispose();
+        scaleManagerRef.current = null;
+      }
 
       const app = appRef.current;
       if (app) {
@@ -574,6 +600,32 @@ export const Live2DViewer = forwardRef<Live2DViewerHandle, Live2DViewerProps>(
         console.error('Failed to load Live2D model:', error);
       });
     }, [modelPath]); // 只依赖modelPath，避免无限循环
+
+    // Handle mouse wheel zoom
+    useEffect(() => {
+      const container = containerRef.current;
+      if (!container) return;
+
+      const handleWheel = (event: WheelEvent) => {
+        if (!scaleManagerRef.current) return;
+        
+        // Prevent default scroll behavior
+        event.preventDefault();
+        
+        // Zoom based on wheel direction
+        if (event.deltaY < 0) {
+          scaleManagerRef.current.zoomIn();
+        } else {
+          scaleManagerRef.current.zoomOut();
+        }
+      };
+
+      container.addEventListener('wheel', handleWheel, { passive: false });
+
+      return () => {
+        container.removeEventListener('wheel', handleWheel);
+      };
+    }, []);
 
     return (
       <div
